@@ -13,6 +13,7 @@ from dict.controller import Controller
 from dict.history import History
 from dict.hotkey import HotkeyWatcher
 from dict.recorder import Recorder
+from dict.settings_window import SettingsWindow
 from dict.transcriber import Transcriber
 from dict.tray import Tray
 from dict.window import HistoryWindow
@@ -89,8 +90,31 @@ def main() -> int:
                 c.on_hotkey()
 
         def _on_open_settings() -> None:
-            # Settings window is added in a later step; stub for now.
-            log.info("settings button clicked (settings window not yet implemented)")
+            log.info("opening settings dialog")
+            # Must run on the Tk thread
+            def open_it() -> None:
+                if window._root is None:  # type: ignore[attr-defined]
+                    return
+
+                def save(new: settings_mod.Settings) -> None:
+                    settings_mod.save(new)
+                    # apply live: hotkey + hotkey label
+                    nonlocal effective_hotkey
+                    if new.hotkey != effective_hotkey:
+                        log.info("re-registering hotkey: %s -> %s",
+                                 effective_hotkey, new.hotkey)
+                        hotkey.stop()
+                        new_watcher = HotkeyWatcher(new.hotkey,
+                                                    on_trigger=controller.on_hotkey)
+                        new_watcher.start()
+                        hotkey_holder["h"] = new_watcher
+                        effective_hotkey = new.hotkey
+                    window.set_hotkey_label(_pretty_hotkey(new.hotkey))
+                    log.info("settings applied (model/lang changes take effect next restart)")
+
+                SettingsWindow(window._root, user_settings, save).open()  # type: ignore[attr-defined]
+
+            window.schedule(open_it)
 
         window = HistoryWindow(
             history=history,
@@ -128,12 +152,13 @@ def main() -> int:
         recorder.set_level_callback(window.set_level)
 
         hotkey = HotkeyWatcher(effective_hotkey, on_trigger=controller.on_hotkey)
+        hotkey_holder: dict[str, HotkeyWatcher] = {"h": hotkey}
 
         def on_left_click() -> None:
             window.toggle()
 
         def on_quit() -> None:
-            hotkey.stop()
+            hotkey_holder["h"].stop()
             window.stop()
             lock.release()
 
