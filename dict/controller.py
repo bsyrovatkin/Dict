@@ -86,13 +86,14 @@ class Controller:
     def on_hotkey(self) -> None:
         with self._state_lock:
             current = self._state
+        log.info("on_hotkey: current state=%s", current.value)
 
         if current is State.IDLE:
             self._start_recording()
         elif current is State.RECORDING:
             self._stop_and_transcribe()
         else:
-            log.debug("hotkey ignored - currently transcribing")
+            log.info("hotkey ignored - currently transcribing")
 
     def _start_recording(self) -> None:
         try:

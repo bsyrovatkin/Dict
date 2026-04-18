@@ -182,6 +182,7 @@ class HistoryWindow:
             self._on_copy(entries[i].text)
 
     def _on_button_click(self) -> None:
+        log.info("start/stop button clicked (state=%s)", self._current_state)
         try:
             self._on_toggle()
         except Exception:

@@ -29,9 +29,11 @@ LANGUAGE: str | None = None  # auto-detect
 BEAM_SIZE = 5
 
 # Hotkey (pynput GlobalHotKeys format)
-# NOTE: <cmd>+b (Win+B) caused pynput to miss the combo on Windows 10/11.
-# Ctrl+Shift+V is free system-wide and reliable with pynput.
-HOTKEY = "<ctrl>+<shift>+v"
+# History:
+#   <cmd>+b       -- Win+B, pynput missed the combo on Win10/11
+#   <ctrl>+<shift>+v -- registered but presses not observed
+# <f9> is a single key, guaranteed not to collide with any common shortcut.
+HOTKEY = "<f9>"
 
 # History
 HISTORY_MAX = 5

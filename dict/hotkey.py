@@ -30,6 +30,7 @@ class HotkeyWatcher:
         self._listener = None
 
     def _on_fire(self) -> None:
+        log.info("hotkey fired: %s", self._combo)
         try:
             self._on_trigger()
         except Exception:
