@@ -115,11 +115,13 @@ class Controller:
         self._sounds.play_stop()
 
         if audio is None:
+            log.warning("recorder returned None (too short or silent) — nothing to transcribe")
             self._tray.set_state("idle")
             self._window.set_state("idle")
             with self._state_lock:
                 self._state = State.IDLE
             return
+        log.info("recorder returned %d samples (%.2fs)", audio.size, audio.size / 16000)
 
         with self._state_lock:
             self._state = State.TRANSCRIBING
@@ -127,6 +129,7 @@ class Controller:
         self._window.set_state("busy")
 
         def worker() -> None:
+            log.info("worker: transcribe() starting (%d samples)", audio.size)
             try:
                 text = self._transcriber.transcribe(audio)
             except Exception:
