@@ -55,15 +55,15 @@ class Recorder:
         if self._stream is not None:
             raise RecorderError("already recording")
         self._chunks = []
+        # Best-effort device log — never let diagnostics crash recording.
         try:
-            default_in = sd.default.device[0] if sd.default.device else None
-            dev_name = (
-                sd.query_devices(default_in)["name"]
-                if default_in is not None
-                else "<default>"
-            )
+            dev_info = sd.query_devices(kind="input")
+            dev_name = dev_info.get("name", "<unknown>") if isinstance(dev_info, dict) else "<unknown>"
             log.info("recorder: opening input stream @%d Hz (device: %s)",
                      self._sample_rate, dev_name)
+        except Exception:
+            log.debug("could not query default input device", exc_info=True)
+        try:
             self._stream = sd.InputStream(
                 samplerate=self._sample_rate,
                 channels=config.CHANNELS,

@@ -21,10 +21,48 @@ from dict.utils_logging import get_logger
 log = get_logger(__name__)
 
 
+# ЙЦУКЕН -> QWERTY mapping. `keyboard` library only recognises Latin
+# key names, so if the user rebinds while in Russian layout we map the
+# captured Cyrillic letter back to the physical QWERTY key underneath.
+_CYR_TO_LAT = {
+    "й": "q", "ц": "w", "у": "e", "к": "r", "е": "t", "н": "y",
+    "г": "u", "ш": "i", "щ": "o", "з": "p", "х": "[", "ъ": "]",
+    "ф": "a", "ы": "s", "в": "d", "а": "f", "п": "g", "р": "h",
+    "о": "j", "л": "k", "д": "l", "ж": ";", "э": "'",
+    "я": "z", "ч": "x", "с": "c", "м": "v", "и": "b", "т": "n",
+    "ь": "m", "б": ",", "ю": ".", "ё": "`",
+}
+
+
+def _latinise_key(key: str) -> str:
+    """Replace a single Cyrillic letter with its QWERTY counterpart.
+    Non-Cyrillic input is returned unchanged."""
+    if len(key) == 1 and key.lower() in _CYR_TO_LAT:
+        return _CYR_TO_LAT[key.lower()]
+    return key
+
+
+def normalize_combo(combo: str) -> str:
+    """Convert pynput-style `<ctrl>+<shift>+v` and Cyrillic-captured keys
+    into a `keyboard` library combo: lowercase, no brackets, QWERTY only.
+    """
+    cleaned = re.sub(r"[<>]", "", combo).lower().strip()
+    parts = [_latinise_key(p.strip()) for p in cleaned.split("+") if p.strip()]
+    return "+".join(parts)
+
+
 def _to_keyboard_lib_syntax(combo: str) -> str:
-    """Convert pynput-style `<ctrl>+<shift>+v` to keyboard-style `ctrl+shift+v`."""
-    # keyboard lib uses plain names without angle brackets
-    return re.sub(r"[<>]", "", combo).lower()
+    """Back-compat alias for existing callers."""
+    return normalize_combo(combo)
+
+
+def is_valid_combo(combo: str) -> bool:
+    """Return True iff `keyboard` can parse this combo."""
+    try:
+        kb.parse_hotkey(normalize_combo(combo))
+        return True
+    except Exception:
+        return False
 
 
 class HotkeyWatcher:

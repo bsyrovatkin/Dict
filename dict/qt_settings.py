@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSlider, QVBoxLayout, QWidget,
 )
 
+from dict.hotkey import is_valid_combo, normalize_combo
 from dict.settings import Settings
 from dict.utils_logging import get_logger
 
@@ -142,9 +143,15 @@ class SettingsDialog(QDialog):
 
         def capture() -> None:
             try:
-                combo = kb.read_hotkey(suppress=False)
+                raw = kb.read_hotkey(suppress=False)
             except Exception:
                 log.exception("hotkey capture failed")
+                raw = self._current.hotkey
+            # Latinise (Cyrillic -> QWERTY) and validate before showing.
+            combo = normalize_combo(raw)
+            if not is_valid_combo(combo):
+                log.warning("captured unparseable combo %r -> %r, keeping old",
+                            raw, combo)
                 combo = self._current.hotkey
             self.hotkey_captured.emit(combo)
 
@@ -159,6 +166,11 @@ class SettingsDialog(QDialog):
     def _save(self) -> None:
         combo = self._hotkey_edit.text().strip()
         if not combo or combo.startswith("press"):
+            combo = self._current.hotkey
+        combo = normalize_combo(combo)
+        if not is_valid_combo(combo):
+            log.warning("invalid combo %r, reverting to %r",
+                        combo, self._current.hotkey)
             combo = self._current.hotkey
         lang_label_val = self._lang_combo.currentText()
         lang_value = next((v for lbl, v in LANGUAGE_CHOICES if lbl == lang_label_val),

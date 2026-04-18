@@ -80,8 +80,16 @@ def main() -> int:
     app.setWindowIcon(QIcon(str(config.ASSETS_DIR / "icon_idle.ico")))
 
     try:
+        from dict.hotkey import is_valid_combo, normalize_combo
+
         user_settings = settings_mod.load()
-        effective_hotkey = user_settings.hotkey or config.HOTKEY
+        effective_hotkey = normalize_combo(user_settings.hotkey or config.HOTKEY)
+        if not is_valid_combo(effective_hotkey):
+            log.warning("saved hotkey %r is invalid for keyboard lib — falling back to %r",
+                        user_settings.hotkey, config.HOTKEY)
+            effective_hotkey = config.HOTKEY
+            user_settings.hotkey = effective_hotkey
+            settings_mod.save(user_settings)
         effective_model = user_settings.model_size or config.MODEL_SIZE
 
         # Business layer (unchanged)
