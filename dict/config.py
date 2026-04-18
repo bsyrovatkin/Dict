@@ -28,12 +28,10 @@ MODEL_SIZE = "small"       # multilingual
 LANGUAGE: str | None = None  # auto-detect
 BEAM_SIZE = 5
 
-# Hotkey (pynput GlobalHotKeys format)
-# History:
-#   <cmd>+b       -- Win+B, pynput missed the combo on Win10/11
-#   <ctrl>+<shift>+v -- registered but presses not observed
-# <f9> is a single key, guaranteed not to collide with any common shortcut.
-HOTKEY = "<f9>"
+# Hotkey. Syntax is the `keyboard` library format (e.g. "windows+b",
+# "ctrl+shift+v", "f9"). Angle brackets from pynput syntax are stripped
+# transparently by HotkeyWatcher for backwards compatibility.
+HOTKEY = "windows+b"
 
 # History
 HISTORY_MAX = 5

@@ -18,11 +18,11 @@ log = get_logger(__name__)
 
 # Visual state config: (button text, bg color, enabled)
 _STATE_STYLES: dict[str, tuple[str, str, bool]] = {
-    "idle":         ("● Start  (Ctrl+Shift+V)",    "#2b8a3e", True),
-    "recording":    ("■ Stop   (Ctrl+Shift+V)",    "#c92a2a", True),
-    "transcribing": ("Transcribing…",              "#888888", False),
-    "busy":         ("Transcribing…",              "#888888", False),
-    "error":        ("● Start  (error)",           "#8e6e00", True),
+    "idle":         ("● Start  (Win+B)",   "#2b8a3e", True),
+    "recording":    ("■ Stop   (Win+B)",   "#c92a2a", True),
+    "transcribing": ("Transcribing…",      "#888888", False),
+    "busy":         ("Transcribing…",      "#888888", False),
+    "error":        ("● Start  (error)",   "#8e6e00", True),
 }
 
 
