@@ -65,9 +65,24 @@ def _pretty_hotkey(combo: str) -> str:
     return "+".join(parts)
 
 
+def _git_commit() -> str:
+    """Short git SHA for startup banner. Falls back to 'unknown'."""
+    import subprocess
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=config.PROJECT_DIR, stderr=subprocess.DEVNULL,
+        )
+        return out.decode().strip()
+    except Exception:
+        return "unknown"
+
+
 def main() -> int:
     _configure_logging()
     log = get_logger("dict.main")
+    log.info("=== DICT starting (commit %s, python %s) ===",
+             _git_commit(), ".".join(str(x) for x in sys.version_info[:3]))
 
     lock = _SingleInstanceLock(config.LOCK_PATH)
     if not lock.acquire():
