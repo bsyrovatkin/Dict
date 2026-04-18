@@ -28,10 +28,11 @@ MODEL_SIZE = "small"       # multilingual
 LANGUAGE: str | None = None  # auto-detect
 BEAM_SIZE = 5
 
-# Hotkey. Syntax is the `keyboard` library format (e.g. "windows+b",
-# "ctrl+shift+v", "f9"). Angle brackets from pynput syntax are stripped
-# transparently by HotkeyWatcher for backwards compatibility.
-HOTKEY = "windows+b"
+# Hotkey. Syntax is the `keyboard` library format ("f9", "ctrl+shift+v",
+# "ctrl+alt+d"). Overridable at runtime via settings.json.
+# F9 is a single key and works reliably; `windows+b` was swallowed by
+# the Windows shell even with a low-level hook installed.
+HOTKEY = "f9"
 
 # History
 HISTORY_MAX = 5
