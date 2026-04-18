@@ -35,6 +35,7 @@ class _TrayProto(Protocol):
 class _WindowProto(Protocol):
     def refresh(self) -> None: ...
     def show_for(self, seconds: float) -> None: ...
+    def set_state(self, state: str) -> None: ...
 
 
 class _HistoryProto(Protocol):
@@ -99,12 +100,14 @@ class Controller:
         except Exception:
             log.exception("recorder start failed")
             self._tray.set_state("error")
+            self._window.set_state("error")
             self._tray.notify("Dict", "Microphone not available")
             return
         with self._state_lock:
             self._state = State.RECORDING
         self._sounds.play_start()
         self._tray.set_state("recording")
+        self._window.set_state("recording")
 
     def _stop_and_transcribe(self) -> None:
         audio = self._recorder.stop()
@@ -112,6 +115,7 @@ class Controller:
 
         if audio is None:
             self._tray.set_state("idle")
+            self._window.set_state("idle")
             with self._state_lock:
                 self._state = State.IDLE
             return
@@ -119,6 +123,7 @@ class Controller:
         with self._state_lock:
             self._state = State.TRANSCRIBING
         self._tray.set_state("busy")
+        self._window.set_state("busy")
 
         def worker() -> None:
             try:
@@ -143,5 +148,6 @@ class Controller:
 
     def _return_to_idle(self) -> None:
         self._tray.set_state("idle")
+        self._window.set_state("idle")
         with self._state_lock:
             self._state = State.IDLE

@@ -65,15 +65,26 @@ def main() -> int:
         return 0
 
     try:
-        # Build the object graph bottom-up.
+        # Build the object graph bottom-up. Controller needs window (which
+        # wants on_toggle=controller.on_hotkey) and tray (created after
+        # controller). Break both cycles with lazy-resolving holders.
         history = History(maxlen=config.HISTORY_MAX)
         recorder = Recorder()
         transcriber = Transcriber()
-        window = HistoryWindow(history=history, on_copy=clipboard.set_text)
 
-        # Controller needs a tray reference but tray callbacks need hotkey +
-        # window. Break the cycle with a lazy-resolving facade.
+        controller_holder: dict[str, "Controller"] = {}
         tray_holder: dict[str, "Tray"] = {}
+
+        def _on_button_toggle() -> None:
+            c = controller_holder.get("c")
+            if c is not None:
+                c.on_hotkey()
+
+        window = HistoryWindow(
+            history=history,
+            on_copy=clipboard.set_text,
+            on_toggle=_on_button_toggle,
+        )
 
         class _TrayFacade:
             def set_state(self, state: str) -> None:
@@ -97,6 +108,7 @@ def main() -> int:
             logger_append=logger_mod.append,
             auto_show_seconds=config.AUTO_SHOW_SECONDS,
         )
+        controller_holder["c"] = controller
 
         hotkey = HotkeyWatcher(config.HOTKEY, on_trigger=controller.on_hotkey)
 
