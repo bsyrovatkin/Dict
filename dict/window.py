@@ -145,15 +145,13 @@ class HistoryWindow:
         self.schedule(lambda: self._show_for_now(seconds))
 
     def _show_for_now(self, seconds: float) -> None:
+        # Simplified: always show, never auto-hide. The user explicitly
+        # controls visibility via the tray click or window close button.
+        # Auto-hide was confusing during smoke tests (results flashed).
+        del seconds
         if self._root is None:
             return
         self._show_now()
-        if self._hide_after_id is not None:
-            try:
-                self._root.after_cancel(self._hide_after_id)
-            except Exception:
-                pass
-        self._hide_after_id = self._root.after(int(seconds * 1000), self._hide_now)
 
     def _show_now(self) -> None:
         if self._root is None:

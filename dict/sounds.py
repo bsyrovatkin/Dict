@@ -14,6 +14,7 @@ def _play(name: str) -> None:
     if not path.exists():
         log.warning("sound %s not found at %s", name, path)
         return
+    log.info("playing %s sound (%s)", name, path)
     try:
         winsound.PlaySound(
             str(path),

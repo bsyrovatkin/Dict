@@ -136,14 +136,22 @@ class Controller:
                 return
             text = (text or "").strip()
             if not text:
+                log.info("transcription returned empty text, dropping")
                 self._return_to_idle()
                 return
+            log.info("post-transcribe: %d chars, distributing...", len(text))
             self._history.push(text)
+            log.info("  history pushed")
             self._logger_append(text)
-            self._clipboard_set(text)
+            log.info("  log appended")
+            ok = self._clipboard_set(text)
+            log.info("  clipboard set ok=%s", ok)
             self._window.refresh()
+            log.info("  window refreshed")
             self._window.show_for(self._auto_show_seconds)
+            log.info("  window shown for %.1fs", self._auto_show_seconds)
             self._return_to_idle()
+            log.info("returned to idle; result: %r", text[:80])
 
         self._spawn(worker)
 
