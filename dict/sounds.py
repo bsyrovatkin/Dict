@@ -30,3 +30,7 @@ def play_start() -> None:
 
 def play_stop() -> None:
     _play("stop")
+
+
+def play_error() -> None:
+    _play("error")

@@ -51,4 +51,5 @@ ICON_FILES = {
 SOUND_FILES = {
     "start": "start.wav",
     "stop":  "stop.wav",
+    "error": "error.wav",
 }
