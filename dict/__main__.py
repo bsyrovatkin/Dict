@@ -1,4 +1,4 @@
-"""Entry point: single-instance lock, wiring, main loop."""
+"""Entry point: single-instance lock, Qt wiring, main loop."""
 from __future__ import annotations
 
 import logging
@@ -8,15 +8,19 @@ from pathlib import Path
 
 import msvcrt
 
+from PySide6.QtCore import QCoreApplication, Qt
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QApplication
+
 from dict import clipboard, config, logger as logger_mod, settings as settings_mod, sounds
 from dict.controller import Controller
 from dict.history import History
 from dict.hotkey import HotkeyWatcher
+from dict.qt_settings import SettingsDialog
+from dict.qt_tray import Tray
+from dict.qt_window import MainWindow
 from dict.recorder import Recorder
-from dict.settings_window import SettingsWindow
 from dict.transcriber import Transcriber
-from dict.tray import Tray
-from dict.window import HistoryWindow
 from dict.utils_logging import get_logger
 
 
@@ -56,7 +60,7 @@ class _SingleInstanceLock:
 
 
 def _pretty_hotkey(combo: str) -> str:
-    """'ctrl+shift+v' -> 'Ctrl+Shift+V' for UI display."""
+    """'ctrl+shift+v' -> 'Ctrl+Shift+V'."""
     parts = [p.strip().capitalize() if len(p.strip()) > 1 else p.strip().upper()
              for p in combo.split("+")]
     return "+".join(parts)
@@ -71,18 +75,23 @@ def main() -> int:
         print("Dict already running")
         return 0
 
+    QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
+    app.setWindowIcon(QIcon(str(config.ASSETS_DIR / "icon_idle.ico")))
+
     try:
         user_settings = settings_mod.load()
         effective_hotkey = user_settings.hotkey or config.HOTKEY
         effective_model = user_settings.model_size or config.MODEL_SIZE
 
-        # Build the object graph bottom-up.
+        # Business layer (unchanged)
         history = History(maxlen=config.HISTORY_MAX)
         recorder = Recorder()
         transcriber = Transcriber(model_size=effective_model)
 
-        controller_holder: dict[str, "Controller"] = {}
-        tray_holder: dict[str, "Tray"] = {}
+        controller_holder: dict[str, Controller] = {}
+        hotkey_holder: dict[str, HotkeyWatcher] = {}
 
         def _on_button_toggle() -> None:
             c = controller_holder.get("c")
@@ -91,38 +100,29 @@ def main() -> int:
 
         def _on_open_settings() -> None:
             log.info("opening settings dialog")
-            # Must run on the Tk thread
-            def open_it() -> None:
-                if window._root is None:  # type: ignore[attr-defined]
-                    return
+            dlg = SettingsDialog(user_settings, _save_settings, parent=window)
+            dlg.exec()
 
-                def save(new: settings_mod.Settings) -> None:
-                    settings_mod.save(new)
-                    # apply live: hotkey + hotkey label
-                    nonlocal effective_hotkey
-                    if new.hotkey != effective_hotkey:
-                        log.info("re-registering hotkey: %s -> %s",
-                                 effective_hotkey, new.hotkey)
-                        hotkey.stop()
-                        new_watcher = HotkeyWatcher(new.hotkey,
-                                                    on_trigger=controller.on_hotkey)
-                        new_watcher.start()
-                        hotkey_holder["h"] = new_watcher
-                        effective_hotkey = new.hotkey
-                    window.set_hotkey_label(_pretty_hotkey(new.hotkey))
-                    log.info("settings applied (model/lang changes take effect next restart)")
+        def _on_close_app() -> None:
+            log.info("quit requested")
+            try:
+                hotkey_holder["h"].stop()
+            except Exception:
+                log.exception("hotkey stop failed")
+            app.quit()
 
-                SettingsWindow(window._root, user_settings, save).open()  # type: ignore[attr-defined]
-
-            window.schedule(open_it)
-
-        window = HistoryWindow(
+        window = MainWindow(
             history=history,
             on_copy=clipboard.set_text,
             on_toggle=_on_button_toggle,
             on_open_settings=_on_open_settings,
+            on_close=_on_close_app,
             hotkey_label=_pretty_hotkey(effective_hotkey),
         )
+
+        # Simple tray facade so Controller can call set_state/notify without
+        # owning a real Tray instance at construction time.
+        tray_holder: dict[str, Tray] = {}
 
         class _TrayFacade:
             def set_state(self, state: str) -> None:
@@ -148,26 +148,40 @@ def main() -> int:
         )
         controller_holder["c"] = controller
 
-        # Wire RMS from recorder → VU meter in window
         recorder.set_level_callback(window.set_level)
 
         hotkey = HotkeyWatcher(effective_hotkey, on_trigger=controller.on_hotkey)
-        hotkey_holder: dict[str, HotkeyWatcher] = {"h": hotkey}
+        hotkey_holder["h"] = hotkey
 
-        def on_left_click() -> None:
+        def on_tray_click() -> None:
             window.toggle()
 
-        def on_quit() -> None:
-            hotkey_holder["h"].stop()
-            window.stop()
-            lock.release()
-
-        tray = Tray(on_left_click=on_left_click, on_quit=on_quit)
+        tray = Tray(on_left_click=on_tray_click, on_quit=_on_close_app)
         tray_holder["tray"] = tray
+        tray.show()
 
-        # Show the window early so the user sees the spinner while Whisper loads.
-        window.start()
+        def _save_settings(new: settings_mod.Settings) -> None:
+            nonlocal effective_hotkey
+            settings_mod.save(new)
+            if new.hotkey != effective_hotkey:
+                log.info("re-registering hotkey: %s -> %s",
+                         effective_hotkey, new.hotkey)
+                hotkey_holder["h"].stop()
+                new_watcher = HotkeyWatcher(new.hotkey,
+                                            on_trigger=controller.on_hotkey)
+                new_watcher.start()
+                hotkey_holder["h"] = new_watcher
+                effective_hotkey = new.hotkey
+            window.set_hotkey_label(_pretty_hotkey(new.hotkey))
+            # mutate user_settings reference so next dialog reads new values
+            user_settings.hotkey = new.hotkey
+            user_settings.model_size = new.model_size
+            user_settings.language = new.language
+            user_settings.volume = new.volume
+            log.info("settings applied (model/lang changes take effect next restart)")
+
         window.set_state("loading")
+        window.show()
 
         def warmup() -> None:
             log.info("warming up whisper model (%s)...", effective_model)
@@ -182,10 +196,10 @@ def main() -> int:
         threading.Thread(target=warmup, name="whisper-warmup", daemon=True).start()
 
         hotkey.start()
-        tray.run()  # blocks until on_quit
+
+        return app.exec()
     finally:
         lock.release()
-    return 0
 
 
 if __name__ == "__main__":
