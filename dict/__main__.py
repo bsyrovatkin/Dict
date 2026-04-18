@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 from pathlib import Path
 
 import msvcrt
 
-from dict import clipboard, config, logger as logger_mod, sounds
+from dict import clipboard, config, logger as logger_mod, settings as settings_mod, sounds
 from dict.controller import Controller
 from dict.history import History
 from dict.hotkey import HotkeyWatcher
@@ -26,8 +27,6 @@ def _configure_logging() -> None:
 
 
 class _SingleInstanceLock:
-    """Non-blocking file lock; on failure the process should exit."""
-
     def __init__(self, path: Path) -> None:
         self._path = path
         self._file = None
@@ -55,6 +54,13 @@ class _SingleInstanceLock:
         self._file = None
 
 
+def _pretty_hotkey(combo: str) -> str:
+    """'ctrl+shift+v' -> 'Ctrl+Shift+V' for UI display."""
+    parts = [p.strip().capitalize() if len(p.strip()) > 1 else p.strip().upper()
+             for p in combo.split("+")]
+    return "+".join(parts)
+
+
 def main() -> int:
     _configure_logging()
     log = get_logger("dict.main")
@@ -65,12 +71,14 @@ def main() -> int:
         return 0
 
     try:
-        # Build the object graph bottom-up. Controller needs window (which
-        # wants on_toggle=controller.on_hotkey) and tray (created after
-        # controller). Break both cycles with lazy-resolving holders.
+        user_settings = settings_mod.load()
+        effective_hotkey = user_settings.hotkey or config.HOTKEY
+        effective_model = user_settings.model_size or config.MODEL_SIZE
+
+        # Build the object graph bottom-up.
         history = History(maxlen=config.HISTORY_MAX)
         recorder = Recorder()
-        transcriber = Transcriber()
+        transcriber = Transcriber(model_size=effective_model)
 
         controller_holder: dict[str, "Controller"] = {}
         tray_holder: dict[str, "Tray"] = {}
@@ -80,10 +88,16 @@ def main() -> int:
             if c is not None:
                 c.on_hotkey()
 
+        def _on_open_settings() -> None:
+            # Settings window is added in a later step; stub for now.
+            log.info("settings button clicked (settings window not yet implemented)")
+
         window = HistoryWindow(
             history=history,
             on_copy=clipboard.set_text,
             on_toggle=_on_button_toggle,
+            on_open_settings=_on_open_settings,
+            hotkey_label=_pretty_hotkey(effective_hotkey),
         )
 
         class _TrayFacade:
@@ -110,7 +124,10 @@ def main() -> int:
         )
         controller_holder["c"] = controller
 
-        hotkey = HotkeyWatcher(config.HOTKEY, on_trigger=controller.on_hotkey)
+        # Wire RMS from recorder → VU meter in window
+        recorder.set_level_callback(window.set_level)
+
+        hotkey = HotkeyWatcher(effective_hotkey, on_trigger=controller.on_hotkey)
 
         def on_left_click() -> None:
             window.toggle()
@@ -123,16 +140,23 @@ def main() -> int:
         tray = Tray(on_left_click=on_left_click, on_quit=on_quit)
         tray_holder["tray"] = tray
 
-        # Warm up the model up front so the first hotkey press is responsive.
-        log.info("warming up whisper model (%s)...", config.MODEL_SIZE)
-        try:
-            transcriber.ensure_loaded()
-        except Exception:
-            log.exception("initial model load failed - hotkey remains active; each attempt will retry")
-
+        # Show the window early so the user sees the spinner while Whisper loads.
         window.start()
+        window.set_state("loading")
+
+        def warmup() -> None:
+            log.info("warming up whisper model (%s)...", effective_model)
+            try:
+                transcriber.ensure_loaded()
+                window.set_state("idle")
+                log.info("dict ready; press %s to record", effective_hotkey)
+            except Exception:
+                log.exception("initial model load failed")
+                window.set_state("error")
+
+        threading.Thread(target=warmup, name="whisper-warmup", daemon=True).start()
+
         hotkey.start()
-        log.info("dict ready; press %s to record", config.HOTKEY)
         tray.run()  # blocks until on_quit
     finally:
         lock.release()

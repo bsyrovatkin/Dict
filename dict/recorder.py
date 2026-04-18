@@ -6,7 +6,7 @@ so we guard the chunk list with a lock.
 from __future__ import annotations
 
 import threading
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 import sounddevice as sd
@@ -15,6 +15,11 @@ from dict import config
 from dict.utils_logging import get_logger
 
 log = get_logger(__name__)
+
+
+# Normalising factor: int16 max, with a little head-room so even 100% loudness
+# never quite saturates the VU meter. 25000 ≈ -2.4 dBFS.
+_VU_REFERENCE = 25000.0
 
 
 def should_drop_recording(audio: np.ndarray, sample_rate: int) -> bool:
@@ -38,6 +43,13 @@ class Recorder:
         self._stream: Optional[sd.InputStream] = None
         self._chunks: list[np.ndarray] = []
         self._lock = threading.Lock()
+        self._level_cb: Optional[Callable[[float], None]] = None
+
+    def set_level_callback(self, cb: Optional[Callable[[float], None]]) -> None:
+        """Register a callback that receives a normalised RMS level
+        (0.0 – 1.0) for every audio chunk. Called from the PortAudio
+        callback thread — do not do heavy work inside the handler."""
+        self._level_cb = cb
 
     def start(self) -> None:
         if self._stream is not None:
@@ -78,5 +90,14 @@ class Recorder:
     def _on_audio(self, indata: np.ndarray, frames: int, time_info, status) -> None:
         if status:
             log.warning("input stream status: %s", status)
+        chunk = indata.copy().reshape(-1)
         with self._lock:
-            self._chunks.append(indata.copy().reshape(-1))
+            self._chunks.append(chunk)
+        cb = self._level_cb
+        if cb is not None and chunk.size > 0:
+            try:
+                rms = float(np.sqrt(np.mean(chunk.astype(np.float64) ** 2)))
+                level = min(1.0, rms / _VU_REFERENCE)
+                cb(level)
+            except Exception:
+                log.exception("level callback raised")
