@@ -21,7 +21,7 @@ DTYPE = "int16"
 
 # Recording semantics
 MIN_RECORDING_SEC = 0.5
-SILENCE_RMS_INT16 = 200    # approx -44 dBFS; recordings quieter than this are dropped
+SILENCE_RMS_INT16 = 30     # approx -60 dBFS; permissive — Whisper's VAD handles the rest
 
 # Whisper
 MODEL_SIZE = "small"       # multilingual

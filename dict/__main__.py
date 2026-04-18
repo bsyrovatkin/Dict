@@ -8,7 +8,6 @@ from pathlib import Path
 
 import msvcrt
 
-from PySide6.QtCore import QCoreApplication, Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
@@ -75,7 +74,7 @@ def main() -> int:
         print("Dict already running")
         return 0
 
-    QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    # High-DPI scaling is enabled automatically in Qt 6 — no explicit attribute needed.
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setWindowIcon(QIcon(str(config.ASSETS_DIR / "icon_idle.ico")))

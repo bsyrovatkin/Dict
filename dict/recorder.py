@@ -56,6 +56,14 @@ class Recorder:
             raise RecorderError("already recording")
         self._chunks = []
         try:
+            default_in = sd.default.device[0] if sd.default.device else None
+            dev_name = (
+                sd.query_devices(default_in)["name"]
+                if default_in is not None
+                else "<default>"
+            )
+            log.info("recorder: opening input stream @%d Hz (device: %s)",
+                     self._sample_rate, dev_name)
             self._stream = sd.InputStream(
                 samplerate=self._sample_rate,
                 channels=config.CHANNELS,
@@ -81,8 +89,14 @@ class Recorder:
             chunks = list(self._chunks)
             self._chunks = []
         if not chunks:
+            log.warning("recorder.stop: no chunks captured")
             return None
         audio = np.concatenate(chunks).reshape(-1)
+        # Always log the actual peak/RMS so we can diagnose silent recordings
+        peak = int(np.abs(audio).max()) if audio.size else 0
+        rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2))) if audio.size else 0.0
+        log.info("recorder.stop: %d samples (%.2fs) peak=%d rms=%.1f",
+                 audio.size, audio.size / self._sample_rate, peak, rms)
         if should_drop_recording(audio, self._sample_rate):
             return None
         return audio
