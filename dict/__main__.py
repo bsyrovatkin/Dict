@@ -108,7 +108,57 @@ def _git_commit() -> str:
         return "unknown"
 
 
+def _selftest() -> int:
+    """Exercise the full transcription path against a 2-second silent
+    numpy array. Writes everything to dict-debug.log so we can diagnose
+    faster-whisper import / load / inference failures inside a PyInstaller
+    bundle. Does NOT open the mic, tray, or Qt window.
+    """
+    _configure_logging()
+    log = get_logger("dict.selftest")
+    log.info("=== DICT selftest (frozen=%s, commit %s, py %s) ===",
+             getattr(sys, "frozen", False),
+             _git_commit(),
+             ".".join(str(x) for x in sys.version_info[:3]))
+    log.info("sys.executable=%s", sys.executable)
+    log.info("sys.path[0]=%s", sys.path[0] if sys.path else "?")
+
+    # Step 1: import check — imports that PyInstaller sometimes misses.
+    for mod_name in ("numpy", "sounddevice", "keyboard", "PySide6",
+                     "ctranslate2", "tokenizers", "onnxruntime",
+                     "faster_whisper", "av"):
+        try:
+            __import__(mod_name)
+            log.info("import OK: %s", mod_name)
+        except Exception as e:
+            log.error("import FAIL: %s -- %r", mod_name, e)
+
+    # Step 2: Transcriber lifecycle
+    try:
+        import numpy as np
+        from dict.transcriber import Transcriber
+
+        log.info("creating Transcriber…")
+        t = Transcriber()
+        log.info("ensure_loaded()…")
+        t.ensure_loaded()
+        log.info("model loaded OK")
+
+        silent = np.zeros(16000 * 2, dtype=np.int16)
+        log.info("transcribe(silent 2s)…")
+        result = t.transcribe(silent)
+        log.info("result=%r", result)
+        log.info("=== SELFTEST PASSED ===")
+        return 0
+    except Exception:
+        log.exception("=== SELFTEST FAILED ===")
+        return 2
+
+
 def main() -> int:
+    if "--selftest" in sys.argv:
+        return _selftest()
+
     _configure_logging()
     log = get_logger("dict.main")
     log.info("=== DICT starting (commit %s, python %s) ===",

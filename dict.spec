@@ -8,24 +8,39 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs  # noqa: F821
+
 # `SPEC` is injected by PyInstaller when this spec is executed.
 PROJECT_DIR = Path(SPEC).resolve().parent  # noqa: F821
+
+# faster-whisper ships silero_vad_v6.onnx under faster_whisper/assets/ and
+# that file is loaded at runtime via onnxruntime. PyInstaller does not copy
+# non-py data files by default; collect_data_files pulls them all in.
+_fw_data = collect_data_files("faster_whisper")
+# onnxruntime has platform DLLs; some of them are pure data plugins
+_ort_data = collect_data_files("onnxruntime")
+# ctranslate2 ships the C++ runtime as DLLs
+_ct_dlls = collect_dynamic_libs("ctranslate2")
 
 a = Analysis(  # noqa: F821
     ["dict/__main__.py"],
     pathex=[str(PROJECT_DIR)],
-    binaries=[],
+    binaries=_ct_dlls,
     datas=[
         ("assets/*.ico", "assets"),
         ("assets/*.wav", "assets"),
         ("assets/*.png", "assets"),
+        *_fw_data,
+        *_ort_data,
     ],
     hiddenimports=[
         # faster-whisper uses runtime imports that PyInstaller sometimes misses
         "faster_whisper",
+        "faster_whisper.vad",
         "ctranslate2",
         "tokenizers",
         "onnxruntime",
+        "onnxruntime.capi._pybind_state",
         # keyboard library registers handlers dynamically
         "keyboard._winkeyboard",
     ],
