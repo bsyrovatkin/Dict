@@ -35,7 +35,7 @@ class SettingsDialog(QDialog):
         self._current = current
         self._on_save = on_save
         self.setWindowTitle("Dict — settings")
-        self.setFixedSize(440, 360)
+        self.setFixedSize(440, 410)  # +50 px for the new gain row
         self.setModal(True)
         self.setStyleSheet(_QSS)
 
@@ -62,6 +62,8 @@ class SettingsDialog(QDialog):
                                        lang_label, attr="_lang_combo"))
         # Volume row
         root.addLayout(self._volume_row())
+        # Mic gain row
+        root.addLayout(self._gain_row())
 
         root.addStretch()
 
@@ -135,6 +137,29 @@ class SettingsDialog(QDialog):
         row.addWidget(self._vol_label)
         return row
 
+    def _gain_row(self) -> QHBoxLayout:
+        """Mic gain slider 0.5x – 5.0x in 0.1 increments (slider 5..50)."""
+        row = QHBoxLayout()
+        label = QLabel("MIC GAIN")
+        label.setObjectName("field")
+        label.setFixedWidth(70)
+        row.addWidget(label)
+
+        self._gain_slider = QSlider(Qt.Horizontal)
+        self._gain_slider.setRange(5, 50)  # 0.5x..5.0x
+        self._gain_slider.setValue(int(round(self._current.mic_gain * 10)))
+        self._gain_slider.setObjectName("volume")  # reuse cyan style
+        row.addWidget(self._gain_slider, 1)
+
+        self._gain_label = QLabel(f"{self._current.mic_gain:.1f}x")
+        self._gain_label.setObjectName("value")
+        self._gain_label.setFixedWidth(46)
+        self._gain_slider.valueChanged.connect(
+            lambda v: self._gain_label.setText(f"{v / 10:.1f}x")
+        )
+        row.addWidget(self._gain_label)
+        return row
+
     # ---- hotkey capture ----
 
     def _start_capture(self) -> None:
@@ -180,6 +205,7 @@ class SettingsDialog(QDialog):
             model_size=self._model_combo.currentText(),
             language=lang_value,
             volume=self._vol_slider.value() / 100.0,
+            mic_gain=self._gain_slider.value() / 10.0,
         )
         try:
             self._on_save(new)

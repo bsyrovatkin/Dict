@@ -21,7 +21,8 @@ class Settings:
     hotkey: str = field(default_factory=lambda: config.HOTKEY)
     model_size: str = field(default_factory=lambda: config.MODEL_SIZE)
     language: str | None = field(default_factory=lambda: config.LANGUAGE)
-    volume: float = 0.7  # 0.0 - 1.0
+    volume: float = 0.7    # 0.0 – 1.0; playback volume (not yet applied to WAVs)
+    mic_gain: float = 1.0  # 0.5 – 5.0; software gain applied before transcription
 
     def to_dict(self) -> dict:
         return asdict(self)

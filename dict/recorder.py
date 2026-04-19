@@ -92,6 +92,15 @@ def _linear_resample(audio: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
     return np.interp(xs, np.arange(audio.size), audio).astype(audio.dtype)
 
 
+def apply_gain(audio: np.ndarray, gain: float) -> np.ndarray:
+    """Multiply int16 audio by `gain`, clip to int16 range, preserve dtype."""
+    if gain == 1.0 or audio.size == 0:
+        return audio
+    boosted = audio.astype(np.int32) * gain
+    np.clip(boosted, -32768, 32767, out=boosted)
+    return boosted.astype(np.int16)
+
+
 class Recorder:
     # Target SR we hand to Whisper
     TARGET_SR = config.SAMPLE_RATE  # 16000
@@ -103,9 +112,16 @@ class Recorder:
         self._chunks: list[np.ndarray] = []
         self._lock = threading.Lock()
         self._level_cb: Optional[Callable[[float], None]] = None
+        self._gain: float = 1.0
 
     def set_level_callback(self, cb: Optional[Callable[[float], None]]) -> None:
         self._level_cb = cb
+
+    def set_gain(self, gain: float) -> None:
+        """Software gain (1.0 = unity). Applied to both transcription audio
+        and the VU level so the meter reflects what Whisper will hear."""
+        self._gain = max(0.1, min(20.0, float(gain)))
+        log.info("recorder gain set to %.2fx", self._gain)
 
     def start(self) -> None:
         if self._stream is not None:
@@ -176,8 +192,13 @@ class Recorder:
         audio = np.concatenate(chunks).reshape(-1)
         peak = int(np.abs(audio).max()) if audio.size else 0
         rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2))) if audio.size else 0.0
-        log.info("recorder.stop: %d samples @%d Hz (%.2fs) peak=%d rms=%.1f",
-                 audio.size, self._native_sr, audio.size / self._native_sr, peak, rms)
+        log.info("recorder.stop: %d samples @%d Hz (%.2fs) peak=%d rms=%.1f gain=%.2fx",
+                 audio.size, self._native_sr, audio.size / self._native_sr, peak, rms, self._gain)
+
+        if self._gain != 1.0:
+            audio = apply_gain(audio, self._gain)
+            new_peak = int(np.abs(audio).max()) if audio.size else 0
+            log.info("recorder.stop: post-gain peak=%d", new_peak)
 
         if self._native_sr != self._target_sr:
             audio = _linear_resample(audio, self._native_sr, self._target_sr)
@@ -198,7 +219,9 @@ class Recorder:
         if cb is not None and chunk.size > 0:
             try:
                 rms = float(np.sqrt(np.mean(chunk.astype(np.float64) ** 2)))
-                level = min(1.0, rms / _VU_REFERENCE)
+                # Reflect gain on the VU meter so user sees the effective level
+                effective_rms = rms * self._gain
+                level = min(1.0, effective_rms / _VU_REFERENCE)
                 cb(level)
             except Exception:
                 log.exception("level callback raised")

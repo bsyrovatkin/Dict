@@ -171,6 +171,7 @@ def main() -> int:
         controller_holder["c"] = controller
 
         recorder.set_level_callback(window.set_level)
+        recorder.set_gain(user_settings.mic_gain)
 
         hotkey = HotkeyWatcher(effective_hotkey, on_trigger=controller.on_hotkey)
         hotkey_holder["h"] = hotkey
@@ -195,11 +196,15 @@ def main() -> int:
                 hotkey_holder["h"] = new_watcher
                 effective_hotkey = new.hotkey
             window.set_hotkey_label(_pretty_hotkey(new.hotkey))
+            # Apply gain live so user can tune sensitivity without restart
+            if new.mic_gain != user_settings.mic_gain:
+                recorder.set_gain(new.mic_gain)
             # mutate user_settings reference so next dialog reads new values
             user_settings.hotkey = new.hotkey
             user_settings.model_size = new.model_size
             user_settings.language = new.language
             user_settings.volume = new.volume
+            user_settings.mic_gain = new.mic_gain
             log.info("settings applied (model/lang changes take effect next restart)")
 
         window.set_state("loading")
