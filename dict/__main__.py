@@ -92,7 +92,7 @@ def main() -> int:
     # High-DPI scaling is enabled automatically in Qt 6 — no explicit attribute needed.
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
-    app.setWindowIcon(QIcon(str(config.ASSETS_DIR / "icon_idle.ico")))
+    app.setWindowIcon(QIcon(str(config.ASSETS_DIR / "dict.ico")))
 
     try:
         from dict.hotkey import is_valid_combo, normalize_combo

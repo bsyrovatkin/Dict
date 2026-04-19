@@ -326,10 +326,18 @@ class MainWindow(QWidget):
         row.addWidget(self._hotkey_badge)
         row.addStretch()
 
-        self._settings_btn = QPushButton("⚙")
+        self._settings_btn = QPushButton()
         self._settings_btn.setObjectName("iconbtn")
         self._settings_btn.setFixedSize(28, 28)
         self._settings_btn.setCursor(Qt.PointingHandCursor)
+        # Use the generated gear PNG; fall back to unicode if missing.
+        from dict import config as _cfg
+        gear_png = _cfg.ASSETS_DIR / "icon_gear@2x.png"
+        if gear_png.exists():
+            self._settings_btn.setIcon(QIcon(str(gear_png)))
+            self._settings_btn.setIconSize(QSize(18, 18))
+        else:
+            self._settings_btn.setText("⚙")
         self._settings_btn.clicked.connect(self._on_open_settings)
 
         self._minimize_btn = QPushButton("—")

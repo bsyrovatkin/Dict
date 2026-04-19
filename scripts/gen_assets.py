@@ -16,29 +16,140 @@ import struct
 import wave
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
-SIZE = 64
-SIZES = [(16, 16), (32, 32), (48, 48), (64, 64)]
+SIZE = 256
+ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 
 SR = 44100
 
+# Jarvis palette (RGB tuples)
+CYAN        = (0,   229, 255)
+CYAN_BRIGHT = (120, 245, 255)
+CYAN_DIM    = (0,   145, 168)
+RED         = (255, 59,  92)
+YELLOW      = (255, 204, 0)
+GREY        = (110, 130, 140)
 
-def _icon(color_dot: tuple[int, int, int] | None) -> Image.Image:
+
+def _draw_mic_icon(accent: tuple[int, int, int],
+                   recording: bool = False) -> Image.Image:
+    """High-res mic icon. Glow ring in `accent`, mic body outline,
+    indicator dot shows state. Designed for sharp downsampling to 16px+."""
     img = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    glow = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+
+    cx, cy = SIZE // 2, SIZE // 2
+
+    # Outer glow ring (blurred afterwards)
+    gd = ImageDraw.Draw(glow)
+    for r, alpha in ((SIZE // 2 - 8, 160), (SIZE // 2 - 16, 90), (SIZE // 2 - 24, 50)):
+        gd.ellipse((cx - r, cy - r, cx + r, cy + r),
+                   outline=(*accent, alpha), width=4)
+    glow = glow.filter(ImageFilter.GaussianBlur(radius=6))
+
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle((22, 8, 42, 40), radius=10, fill=(40, 40, 40, 255))
-    d.rectangle((30, 40, 34, 52), fill=(40, 40, 40, 255))
-    d.rectangle((20, 52, 44, 56), fill=(40, 40, 40, 255))
-    if color_dot is not None:
-        d.ellipse((44, 8, 60, 24), fill=(*color_dot, 255))
-    return img
+
+    # Outer circle (solid thin cyan)
+    r_outer = SIZE // 2 - 10
+    d.ellipse((cx - r_outer, cy - r_outer, cx + r_outer, cy + r_outer),
+              outline=(*accent, 255), width=4)
+
+    # Tick marks at cardinal points
+    tick_r1 = r_outer - 6
+    tick_r2 = r_outer - 20
+    for deg in (0, 90, 180, 270):
+        a = math.radians(deg)
+        x1 = cx + tick_r1 * math.cos(a)
+        y1 = cy + tick_r1 * math.sin(a)
+        x2 = cx + tick_r2 * math.cos(a)
+        y2 = cy + tick_r2 * math.sin(a)
+        d.line((x1, y1, x2, y2), fill=(*accent, 255), width=3)
+
+    # Microphone body — capsule
+    mic_top = int(SIZE * 0.28)
+    mic_bot = int(SIZE * 0.58)
+    mic_left = int(SIZE * 0.42)
+    mic_right = int(SIZE * 0.58)
+    mic_width = mic_right - mic_left
+    d.rounded_rectangle(
+        (mic_left, mic_top, mic_right, mic_bot),
+        radius=mic_width // 2,
+        fill=(*accent, 255) if recording else (0, 0, 0, 0),
+        outline=(*accent, 255),
+        width=5,
+    )
+
+    # U-shaped mic stand arc
+    stand_r = int(SIZE * 0.18)
+    stand_box = (cx - stand_r, cy - stand_r // 2, cx + stand_r, cy + stand_r * 2 - 8)
+    d.arc(stand_box, start=20, end=160, fill=(*accent, 255), width=5)
+    # Vertical stem
+    d.line((cx, mic_bot + 8, cx, mic_bot + int(SIZE * 0.12)),
+           fill=(*accent, 255), width=5)
+    # Base
+    base_w = int(SIZE * 0.12)
+    d.line((cx - base_w, mic_bot + int(SIZE * 0.12),
+            cx + base_w, mic_bot + int(SIZE * 0.12)),
+           fill=(*accent, 255), width=5)
+
+    # Composite glow behind, icon on top
+    out = Image.alpha_composite(glow, img)
+    return out
 
 
-def write_icon(name: str, dot: tuple[int, int, int] | None) -> None:
-    img = _icon(dot)
-    img.save(ASSETS / name, format="ICO", sizes=SIZES)
+def write_icon(name: str, accent: tuple[int, int, int], recording: bool = False) -> None:
+    img = _draw_mic_icon(accent, recording=recording)
+    img.save(ASSETS / name, format="ICO", sizes=ICO_SIZES)
+    # Also save a PNG for easy preview / GitHub README
+    png_name = name.replace(".ico", ".png")
+    img.save(ASSETS / png_name, format="PNG")
+
+
+def _draw_gear(size: int = 64, accent: tuple[int, int, int] = CYAN) -> Image.Image:
+    """Minimalist gear icon for the settings button."""
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    glow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    cx = cy = size / 2
+
+    outer_r = size * 0.42
+    inner_r = size * 0.30
+    hole_r = size * 0.14
+    teeth = 8
+
+    # Glow layer
+    gd = ImageDraw.Draw(glow)
+    gd.ellipse((cx - outer_r - 2, cy - outer_r - 2, cx + outer_r + 2, cy + outer_r + 2),
+               outline=(*accent, 140), width=3)
+    glow = glow.filter(ImageFilter.GaussianBlur(radius=2))
+
+    d = ImageDraw.Draw(img)
+
+    # Teeth as small squares around the perimeter
+    for i in range(teeth):
+        a = 2 * math.pi * i / teeth
+        r = outer_r
+        w = size * 0.08
+        x = cx + r * math.cos(a)
+        y = cy + r * math.sin(a)
+        d.rectangle((x - w / 2, y - w / 2, x + w / 2, y + w / 2),
+                    fill=(*accent, 255))
+
+    # Ring body
+    d.ellipse((cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r),
+              outline=(*accent, 255), width=int(size * 0.06))
+    # Center hole
+    d.ellipse((cx - hole_r, cy - hole_r, cx + hole_r, cy + hole_r),
+              fill=(0, 0, 0, 0), outline=(*accent, 255), width=int(size * 0.04))
+
+    return Image.alpha_composite(glow, img)
+
+
+def write_gear_png(name: str = "icon_gear.png", size: int = 64,
+                   accent: tuple[int, int, int] = CYAN) -> None:
+    img = _draw_gear(size, accent)
+    img.save(ASSETS / name, format="PNG")
 
 
 def _adsr(i: int, n: int, attack: int, release: int) -> float:
@@ -125,10 +236,20 @@ ERROR_SEQ = [G5, E5 - 1]  # E♭5 = E5 - 1 semitone
 
 def main() -> None:
     ASSETS.mkdir(parents=True, exist_ok=True)
-    write_icon("icon_idle.ico",      dot=None)
-    write_icon("icon_recording.ico", dot=(220, 40, 40))
-    write_icon("icon_busy.ico",      dot=(200, 200, 50))
-    write_icon("icon_error.ico",     dot=(150, 150, 150))
+
+    # Neon mic icons — state tint matches app palette
+    write_icon("icon_idle.ico",      accent=CYAN,   recording=False)
+    write_icon("icon_recording.ico", accent=RED,    recording=True)
+    write_icon("icon_busy.ico",      accent=YELLOW, recording=False)
+    write_icon("icon_error.ico",     accent=GREY,   recording=False)
+
+    # Settings gear (used by the ⚙ button in the window header)
+    write_gear_png("icon_gear.png", size=32, accent=CYAN)
+    # Larger variant for HiDPI / docs
+    write_gear_png("icon_gear@2x.png", size=64, accent=CYAN)
+
+    # Bundled favicon — same as idle mic
+    write_icon("dict.ico", accent=CYAN, recording=False)
 
     start = _sequence([_note_hz(st) for st in START_SEQ],
                       note_duration_s=0.22, step_s=0.06)
