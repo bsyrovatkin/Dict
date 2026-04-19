@@ -23,11 +23,41 @@ from dict.transcriber import Transcriber
 from dict.utils_logging import get_logger
 
 
+def _debug_log_path() -> Path:
+    """Where dict-debug.log lives.
+
+    - Frozen (PyInstaller one-dir): next to dict.exe.
+    - Running from source: project root.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "dict-debug.log"
+    return config.PROJECT_DIR / "dict-debug.log"
+
+
 def _configure_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s | %(message)s",
-    )
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s | %(message)s")
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    # Clear any handlers (PyInstaller sometimes pre-configures one)
+    root.handlers.clear()
+
+    # Console handler (no-op if running without a console, but harmless)
+    stream = logging.StreamHandler()
+    stream.setFormatter(fmt)
+    root.addHandler(stream)
+
+    # File handler — always works, captures everything even when exe has no console
+    try:
+        debug_path = _debug_log_path()
+        debug_path.parent.mkdir(parents=True, exist_ok=True)
+        file_h = logging.FileHandler(debug_path, mode="a", encoding="utf-8")
+        file_h.setFormatter(fmt)
+        root.addHandler(file_h)
+    except Exception:
+        # Never let logging setup break the app.
+        pass
 
 
 class _SingleInstanceLock:
