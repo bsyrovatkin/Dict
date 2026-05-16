@@ -859,6 +859,33 @@ class _HeaderWidget(QWidget):
         p.fillRect(0, y, self.width(), 1, QBrush(grad))
 
 
+# ---------- Panel widget with corner brackets ------------------------------
+
+class _PanelWidget(QWidget):
+    """Main panel widget: paints state-tinted corner brackets after children."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._state = "idle"
+
+    def set_state(self, state: str) -> None:
+        self._state = state
+        self.update()
+
+    def paintEvent(self, ev) -> None:
+        super().paintEvent(ev)
+        from PySide6.QtGui import QPainter
+        from dict.qt_design import paint_corner_brackets, state_color
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        col = state_color(self._state)
+        col = QColor(col)
+        col.setAlpha(180)
+        # Inset 1px so brackets sit on the panel border, not outside
+        rect = self.rect().adjusted(1, 1, -2, -2)
+        paint_corner_brackets(p, rect, col, size=14, width=1.5)
+
+
 # ---------- Main window ----------------------------------------------------
 
 class MainWindow(QWidget):
@@ -920,8 +947,8 @@ class MainWindow(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
-        # Panel container with state-tinted drop shadow
-        self._panel = QWidget(self)
+        # Panel container with state-tinted drop shadow + corner brackets
+        self._panel = _PanelWidget(self)
         self._panel.setObjectName("panel")
         shadow = QGraphicsDropShadowEffect(self._panel)
         shadow.setBlurRadius(70)
@@ -1052,10 +1079,12 @@ class MainWindow(QWidget):
         self._status_strip.set_state(state)
         self._cta.set_state(state)
         self._transcript_panel.set_state(state)
-        # Update panel drop-shadow tint
+        # Update panel drop-shadow tint + corner brackets
         col = state_color(state)
         glow = QColor(col.red(), col.green(), col.blue(), 60)
         self._panel_shadow.setColor(glow)
+        if isinstance(self._panel, _PanelWidget):
+            self._panel.set_state(state)
 
     def _apply_level(self, level: float) -> None:
         self._record_widget.set_level(level)
