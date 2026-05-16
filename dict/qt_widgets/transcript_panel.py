@@ -224,8 +224,9 @@ class _TranscriptBody(QTextEdit):
         # 1.5s" flicker. Only repaint when the delta is meaningful.
         if text == old:
             return
-        if abs(len(text) - len(old)) < 3 and self._levenshtein_lite(text, old) < 3:
-            return
+        # Skip only on truly identical text — user wants speed over flicker
+        # mitigation. The change-required threshold is now ~zero (any diff
+        # repaints).
         self._preview_text = text
         self._render()
 

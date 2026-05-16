@@ -42,13 +42,15 @@ AUTO_SHOW_SECONDS = 2.0
 
 # Streaming / paste
 AUTO_PASTE = True            # send Ctrl+V into the focused field after transcription
-STREAM_PAUSE_MS = 250        # silence duration that commits a segment
-STREAM_HARD_CAP_S = 4.0      # max speech-only seconds in a segment before forced commit
-STREAM_HARD_CAP_ELAPSED_S = 3.0  # wall-clock cap including inter-phrase pauses
+STREAM_PAUSE_MS = 200        # silence duration that commits a segment (aggressive — faster commits)
+STREAM_HARD_CAP_S = 3.0      # max speech-only seconds in a segment before forced commit
+STREAM_HARD_CAP_ELAPSED_S = 2.0  # wall-clock cap including inter-phrase pauses (faster real-time feel)
 
 # Real-time preview transcription (sliding window on uncommitted audio)
-PREVIEW_INTERVAL_S = 2.5     # how often to re-run Whisper on pending audio (was 1.5 — slower = less flicker)
-PREVIEW_WINDOW_S = 4.0       # transcribe the last N seconds of pending audio
+# Tuned for SPEED — preview should feel close to live captioning. Stability
+# filter in TranscriptPanel suppresses repaint when text didn't change much.
+PREVIEW_INTERVAL_S = 0.9     # how often to re-run Whisper on pending audio
+PREVIEW_WINDOW_S = 2.5       # transcribe the last N seconds of pending audio (smaller = faster Whisper)
 
 # Icon filenames (inside ASSETS_DIR)
 ICON_FILES = {
