@@ -21,6 +21,7 @@ class State(enum.Enum):
 class _RecorderProto(Protocol):
     def start(self) -> None: ...
     def stop(self) -> np.ndarray | None: ...
+    def set_push_callback(self, cb: Callable[[np.ndarray], None] | None) -> None: ...
 
 
 class _TranscriberProto(Protocol):
@@ -36,6 +37,8 @@ class _WindowProto(Protocol):
     def refresh(self) -> None: ...
     def show_for(self, seconds: float) -> None: ...
     def set_state(self, state: str) -> None: ...
+    def append_partial(self, text: str) -> None: ...
+    def clear_partials(self) -> None: ...
 
 
 class _HistoryProto(Protocol):
@@ -45,6 +48,12 @@ class _HistoryProto(Protocol):
 class _SoundsProto(Protocol):
     def play_start(self) -> None: ...
     def play_stop(self) -> None: ...
+
+
+class _StreamerProto(Protocol):
+    def start(self) -> None: ...
+    def push(self, chunk: np.ndarray) -> None: ...
+    def stop(self) -> str: ...
 
 
 def _default_spawn(target: Callable[[], None]) -> None:
@@ -62,6 +71,10 @@ class Controller:
         sounds: _SoundsProto,
         clipboard_set: Callable[[str], bool],
         logger_append: Callable[[str], None],
+        streamer: _StreamerProto,
+        paste: Callable[[str, str | None], bool],
+        get_current_hotkey: Callable[[], str],
+        auto_paste: bool,
         spawn: Callable[[Callable[[], None]], None] = _default_spawn,
         auto_show_seconds: float = 2.0,
     ) -> None:
@@ -73,6 +86,10 @@ class Controller:
         self._sounds = sounds
         self._clipboard_set = clipboard_set
         self._logger_append = logger_append
+        self._streamer = streamer
+        self._paste = paste
+        self._get_current_hotkey = get_current_hotkey
+        self._auto_paste = auto_paste
         self._spawn = spawn
         self._auto_show_seconds = auto_show_seconds
         self._state = State.IDLE
@@ -96,32 +113,48 @@ class Controller:
             log.info("hotkey ignored - currently transcribing")
 
     def _start_recording(self) -> None:
+        if not getattr(self._transcriber, "is_loaded", True):
+            log.info("hotkey while model still loading — ignoring")
+            self._tray.set_state("loading")
+            self._window.set_state("loading")
+            self._tray.notify("Dict", "Model still loading — try again in a moment")
+            return
         try:
+            self._recorder.set_push_callback(self._streamer.push)
             self._recorder.start()
         except Exception:
             log.exception("recorder start failed")
             self._tray.set_state("error")
             self._window.set_state("error")
             self._tray.notify("Dict", "Microphone not available")
+            try:
+                self._recorder.set_push_callback(None)
+            except Exception:
+                log.exception("clearing push_callback after start failure failed")
             return
+        try:
+            self._streamer.start()
+        except Exception:
+            log.exception("streamer start failed — recording without streaming")
         with self._state_lock:
             self._state = State.RECORDING
         self._sounds.play_start()
         self._tray.set_state("recording")
         self._window.set_state("recording")
+        try:
+            self._window.show_for(self._auto_show_seconds)
+        except Exception:
+            log.exception("window show failed")
 
     def _stop_and_transcribe(self) -> None:
         audio = self._recorder.stop()
+        # Clear the push callback BEFORE streamer.stop so no more chunks
+        # arrive while we're flushing.
+        try:
+            self._recorder.set_push_callback(None)
+        except Exception:
+            log.exception("clearing push_callback failed (continuing)")
         self._sounds.play_stop()
-
-        if audio is None:
-            log.warning("recorder returned None (too short or silent) — nothing to transcribe")
-            self._tray.set_state("idle")
-            self._window.set_state("idle")
-            with self._state_lock:
-                self._state = State.IDLE
-            return
-        log.info("recorder returned %d samples (%.2fs)", audio.size, audio.size / 16000)
 
         with self._state_lock:
             self._state = State.TRANSCRIBING
@@ -129,32 +162,46 @@ class Controller:
         self._window.set_state("busy")
 
         def worker() -> None:
-            log.info("worker: transcribe() starting (%d samples)", audio.size)
             try:
-                text = self._transcriber.transcribe(audio)
+                stream_text = self._streamer.stop() or ""
             except Exception:
-                log.exception("transcription failed")
-                self._tray.notify("Dict", "Transcription failed")
-                self._return_to_idle()
-                return
-            text = (text or "").strip()
+                log.exception("streamer.stop failed")
+                stream_text = ""
+            text = stream_text
+            if not text.strip() and audio is not None:
+                # Fallback: streaming produced nothing — try whole-buffer transcribe
+                try:
+                    text = self._transcriber.transcribe(audio) or ""
+                except Exception:
+                    log.exception("fallback transcribe failed")
+                    text = ""
+            text = text.strip()
             if not text:
-                log.info("transcription returned empty text, dropping")
+                log.info("no text produced; returning to idle")
+                try:
+                    self._window.clear_partials()
+                except Exception:
+                    log.exception("clear_partials failed (continuing)")
                 self._return_to_idle()
                 return
-            log.info("post-transcribe: %d chars, distributing...", len(text))
+            log.info("delivering %d chars", len(text))
             self._history.push(text)
-            log.info("  history pushed")
             self._logger_append(text)
-            log.info("  log appended")
-            ok = self._clipboard_set(text)
-            log.info("  clipboard set ok=%s", ok)
+            if self._auto_paste:
+                try:
+                    ok = self._paste(text, self._get_current_hotkey())
+                    log.info("auto-paste sent ok=%s", ok)
+                except Exception:
+                    log.exception("paste failed; text is in clipboard for manual paste")
+            else:
+                self._clipboard_set(text)
             self._window.refresh()
-            log.info("  window refreshed")
             self._window.show_for(self._auto_show_seconds)
-            log.info("  window shown for %.1fs", self._auto_show_seconds)
+            try:
+                self._window.clear_partials()
+            except Exception:
+                log.exception("clear_partials failed (continuing)")
             self._return_to_idle()
-            log.info("returned to idle; result: %r", text[:80])
 
         self._spawn(worker)
 
