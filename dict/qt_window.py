@@ -522,14 +522,17 @@ class _HotkeySlab(QWidget):
 
     def sizeHint(self) -> QSize:
         from dict.qt_design import FONT_MONO
-        fm_dim = self.fontMetrics()
         f = QFont(FONT_MONO)
         f.setPointSize(7)
         from PySide6.QtGui import QFontMetrics
         fm = QFontMetrics(f)
-        w = fm.horizontalAdvance("HOTKEY ") + fm.horizontalAdvance(self._label) + 16 + 4
-        h = fm.height() + 6
-        return QSize(max(w, 50), max(h, 18))
+        # 8px left pad + "HOTKEY " + label + 8px right pad + 4px extra
+        w = fm.horizontalAdvance("HOTKEY ") + fm.horizontalAdvance(self._label) + 24
+        h = fm.height() + 8
+        return QSize(max(w, 60), max(h, 18))
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
 
     def paintEvent(self, _ev) -> None:
         from dict.qt_design import TEXT_DIM, TEXT_HI, FONT_MONO
@@ -873,9 +876,14 @@ class _PanelWidget(QWidget):
         self.update()
 
     def paintEvent(self, ev) -> None:
-        super().paintEvent(ev)
+        # Explicit fill: stylesheet-driven background gets suppressed by
+        # QGraphicsDropShadowEffect, so paint SURFACE_1 ourselves first.
         from PySide6.QtGui import QPainter
-        from dict.qt_design import paint_corner_brackets, state_color
+        from dict.qt_design import paint_corner_brackets, state_color, SURFACE_1
+        p_fill = QPainter(self)
+        p_fill.fillRect(self.rect(), SURFACE_1)
+        p_fill.end()
+        super().paintEvent(ev)
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
         col = state_color(self._state)
@@ -927,6 +935,15 @@ class MainWindow(QWidget):
         self.setMinimumSize(560, 680)
         self.resize(560, 680)
 
+        # Ensure any gap around the panel (e.g. bleed from drop shadow) is
+        # painted BG (#03040a) rather than the system default light gray.
+        from PySide6.QtGui import QPalette
+        from dict.qt_design import BG
+        pal = self.palette()
+        pal.setColor(QPalette.Window, BG)
+        self.setPalette(pal)
+        self.setAutoFillBackground(True)
+
         self._build_ui()
         self._apply_styles()
 
@@ -950,9 +967,9 @@ class MainWindow(QWidget):
         self._panel = _PanelWidget(self)
         self._panel.setObjectName("panel")
         shadow = QGraphicsDropShadowEffect(self._panel)
-        shadow.setBlurRadius(70)
+        shadow.setBlurRadius(24)
         idle_col = state_color("idle")
-        shadow.setColor(QColor(idle_col.red(), idle_col.green(), idle_col.blue(), 51))
+        shadow.setColor(QColor(idle_col.red(), idle_col.green(), idle_col.blue(), 45))
         shadow.setOffset(0, 0)
         self._panel.setGraphicsEffect(shadow)
         self._panel_shadow = shadow
@@ -1080,7 +1097,7 @@ class MainWindow(QWidget):
         self._transcript_panel.set_state(state)
         # Update panel drop-shadow tint + corner brackets
         col = state_color(state)
-        glow = QColor(col.red(), col.green(), col.blue(), 60)
+        glow = QColor(col.red(), col.green(), col.blue(), 45)
         self._panel_shadow.setColor(glow)
         if isinstance(self._panel, _PanelWidget):
             self._panel.set_state(state)
