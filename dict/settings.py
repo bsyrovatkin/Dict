@@ -23,6 +23,7 @@ class Settings:
     language: str | None = field(default_factory=lambda: config.LANGUAGE)
     volume: float = 0.7    # 0.0 – 1.0; playback volume (not yet applied to WAVs)
     mic_gain: float = 1.0  # 0.5 – 5.0; software gain applied before transcription
+    auto_paste: bool = field(default_factory=lambda: config.AUTO_PASTE)
 
     def to_dict(self) -> dict:
         return asdict(self)

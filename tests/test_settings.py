@@ -40,3 +40,16 @@ def test_load_falls_back_on_corrupt_file(monkeypatch, tmp_path: Path):
     s = settings_mod.load()
     # Does not raise; returns defaults
     assert s.model_size == "small"
+
+
+def test_settings_default_auto_paste_true():
+    s = settings_mod.Settings()
+    assert s.auto_paste is True
+
+
+def test_settings_load_preserves_auto_paste_false(tmp_path, monkeypatch):
+    p = tmp_path / "settings.json"
+    p.write_text('{"hotkey": "f9", "auto_paste": false}', encoding="utf-8")
+    monkeypatch.setattr(settings_mod, "SETTINGS_PATH", p)
+    s = settings_mod.load()
+    assert s.auto_paste is False
