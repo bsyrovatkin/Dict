@@ -107,7 +107,13 @@ class _CadenceTrack(QWidget):
 
 class _TranscriptBody(QTextEdit):
     """Read-only scrollable text body. Sticky-to-bottom: auto-scroll when
-    user is at the bottom; preserve scroll position when they scrolled up."""
+    user is at the bottom; preserve scroll position when they scrolled up.
+
+    Holds two pieces of text:
+      _committed_text : the committed chunks joined by spaces (white)
+      _preview_text   : the in-flight preview (dim italic, last line)
+    Both are rendered via setHtml() so we can style them differently.
+    """
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setReadOnly(True)
@@ -137,15 +143,56 @@ class _TranscriptBody(QTextEdit):
             }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
         """)
+        self._committed_text: str = ""
+        self._preview_text: str = ""
 
-    def append_chunk(self, text: str) -> None:
+    @staticmethod
+    def _esc(s: str) -> str:
+        return (s.replace("&", "&amp;")
+                 .replace("<", "&lt;")
+                 .replace(">", "&gt;"))
+
+    def _render(self) -> None:
         bar = self.verticalScrollBar()
         was_at_bottom = (bar.value() >= bar.maximum() - 4)
-        cur = self.toPlainText()
-        joined = (cur + " " + text).strip() if cur else text
-        self.setPlainText(joined)
+        committed_html = self._esc(self._committed_text)
+        if self._preview_text:
+            sep = " " if committed_html else ""
+            preview_html = (
+                f"{sep}<span style='color:{TEXT_DIM.name()}; font-style: italic;'>"
+                f"… {self._esc(self._preview_text)}</span>"
+            )
+        else:
+            preview_html = ""
+        body = (
+            f"<div style='color:{TEXT_MID.name()};'>"
+            f"{committed_html}{preview_html}"
+            f"</div>"
+        )
+        self.setHtml(body)
         if was_at_bottom:
             QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
+
+    def append_chunk(self, text: str) -> None:
+        if self._committed_text:
+            self._committed_text = (self._committed_text + " " + text).strip()
+        else:
+            self._committed_text = text
+        # A real commit invalidates any preview we might be showing.
+        self._preview_text = ""
+        self._render()
+
+    def set_preview(self, text: str) -> None:
+        self._preview_text = text or ""
+        self._render()
+
+    def clear_all(self) -> None:
+        self._committed_text = ""
+        self._preview_text = ""
+        self.setHtml("")
+
+    def plain_committed(self) -> str:
+        return self._committed_text
 
 
 class TranscriptPanel(QWidget):
@@ -257,12 +304,20 @@ class TranscriptPanel(QWidget):
         self._body.append_chunk(text)
         self._cadence.mark()
         self._empty_label.setVisible(False)
-        # Update word count
-        wc = len(self._body.toPlainText().split())
+        # Update word count from committed text only (preview is in-flight)
+        wc = len(self._body.plain_committed().split())
         self._word_count.setText(f"{wc} WORDS")
 
+    def set_preview(self, text: str) -> None:
+        """Show an in-flight preview line (dim italic) after the committed
+        text. Replaces any previous preview. Cleared automatically when
+        append_partial commits a real chunk."""
+        self._body.set_preview(text)
+        if text:
+            self._empty_label.setVisible(False)
+
     def clear(self) -> None:
-        self._body.setPlainText("")
+        self._body.clear_all()
         self._empty_label.setVisible(True)
         self._word_count.setText("0 WORDS")
         self._cadence.set_state("idle")

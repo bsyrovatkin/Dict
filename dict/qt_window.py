@@ -918,6 +918,7 @@ class MainWindow(QWidget):
     toggle_requested = Signal()
     partial_appended_signal = Signal(str)
     partials_cleared_signal = Signal()
+    preview_set_signal = Signal(str)
 
     def __init__(
         self,
@@ -968,6 +969,7 @@ class MainWindow(QWidget):
         self.toggle_requested.connect(self._apply_toggle)
         self.partial_appended_signal.connect(self._apply_partial_appended)
         self.partials_cleared_signal.connect(self._apply_partials_cleared)
+        self.preview_set_signal.connect(self._apply_preview_set)
 
     # ---- UI construction ----
 
@@ -1138,8 +1140,16 @@ class MainWindow(QWidget):
     def _apply_partials_cleared(self) -> None:
         self._transcript_panel.clear()
 
+    def _apply_preview_set(self, text: str) -> None:
+        self._transcript_panel.set_preview(text)
+
     def append_partial(self, text: str) -> None:
         self.partial_appended_signal.emit(text)
 
     def clear_partials(self) -> None:
         self.partials_cleared_signal.emit()
+
+    def set_preview(self, text: str) -> None:
+        """Thread-safe: routes a preview update through Qt's signal queue
+        so the GUI is touched only from the Qt main thread."""
+        self.preview_set_signal.emit(text)

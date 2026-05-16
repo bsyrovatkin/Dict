@@ -106,6 +106,17 @@ class _SegmentBuilder:
             return None
         return self._take_current()
 
+    def get_pending_audio(self, last_s: float | None = None) -> "np.ndarray | None":
+        """Return a copy of pending (uncommitted) chunks concatenated, optionally
+        trimmed to the LAST `last_s` seconds. Read-only; does not commit."""
+        if not self._current:
+            return None
+        seg = np.concatenate(self._current)
+        if last_s is None:
+            return seg
+        max_samples = int(last_s * self._sample_rate)
+        return seg[-max_samples:] if seg.size > max_samples else seg
+
     def _take_current(self) -> np.ndarray | None:
         if not self._current:
             return None
@@ -172,9 +183,15 @@ class VadStreamer:
         hard_cap_s: float = 12.0,
         sample_rate: int = 16000,
         hard_cap_elapsed_s: float = 5.0,
+        on_preview: Optional[Callable[[str], None]] = None,
+        preview_interval_s: float = 1.5,
+        preview_window_s: float = 4.0,
     ):
         self._transcriber = transcriber
         self._on_partial = on_partial
+        self._on_preview = on_preview
+        self._preview_interval_s = preview_interval_s
+        self._preview_window_s = preview_window_s
         self._pause_ms = pause_ms
         self._hard_cap_s = hard_cap_s
         self._hard_cap_elapsed_s = hard_cap_elapsed_s
@@ -187,6 +204,8 @@ class VadStreamer:
         self._running = threading.Event()
         self._vad_thread: Optional[threading.Thread] = None
         self._tx_thread: Optional[threading.Thread] = None
+        self._preview_thread: Optional[threading.Thread] = None
+        self._preview_clear_event = threading.Event()
         self._vad: Optional[_VadAccumulator] = None
         self._builder: Optional[_SegmentBuilder] = None
         self._passthrough = False
@@ -237,6 +256,12 @@ class VadStreamer:
         )
         self._vad_thread.start()
         self._tx_thread.start()
+        if self._on_preview is not None:
+            self._preview_clear_event.clear()
+            self._preview_thread = threading.Thread(
+                target=self._preview_loop, name="preview-loop", daemon=True
+            )
+            self._preview_thread.start()
 
     def push(self, chunk: np.ndarray) -> None:
         if self._passthrough or not self._running.is_set():
@@ -262,6 +287,11 @@ class VadStreamer:
                     "VadStreamer.stop: tx_thread did not join in 60s; leaking — "
                     "next start() will fail until thread exits"
                 )
+        if self._preview_thread is not None:
+            self._preview_thread.join(timeout=5.0)
+            if self._preview_thread.is_alive():
+                log.error("VadStreamer.stop: preview_thread did not join in 5s; leaking")
+            self._preview_thread = None
         with self._committed_lock:
             text = " ".join(self._committed).strip()
         self._last_stop_text = text
@@ -320,12 +350,61 @@ class VadStreamer:
             text = (text or "").strip()
             if not text:
                 continue
+            # Signal preview to drop any in-flight transcription — a real
+            # commit is about to land, so a stale preview would just flash
+            # confusing text in the UI.
+            self._preview_clear_event.set()
             with self._committed_lock:
                 self._committed.append(text)
             try:
                 self._on_partial(text)
             except Exception:
                 log.exception("on_partial callback raised")
+
+    def _preview_loop(self) -> None:
+        """Periodically run Whisper on the LAST `preview_window_s` seconds of
+        pending (uncommitted) audio and pipe the result to `on_preview`.
+
+        Runs in its own thread. Sleeps in 100ms slices so stop() returns
+        quickly. A commit landing during a transcribe call invalidates the
+        result (drop it) via `_preview_clear_event`.
+        """
+        import time as _time
+        while True:
+            slept = 0.0
+            while slept < self._preview_interval_s:
+                if not self._running.is_set():
+                    return
+                _time.sleep(0.1)
+                slept += 0.1
+            if not self._running.is_set():
+                return
+            audio = None
+            if self._builder is not None:
+                try:
+                    audio = self._builder.get_pending_audio(last_s=self._preview_window_s)
+                except Exception:
+                    log.exception("preview get_pending_audio failed")
+            if audio is None or audio.size < self._sample_rate // 2:  # < 0.5s
+                continue
+            try:
+                text = self._transcriber.transcribe(audio)
+            except Exception:
+                log.exception("preview transcribe failed; continuing")
+                continue
+            text = (text or "").strip()
+            if not text:
+                continue
+            # If a real commit landed since we started transcribing, drop this stale preview
+            if self._preview_clear_event.is_set():
+                self._preview_clear_event.clear()
+                continue
+            if self._on_preview is None:
+                continue
+            try:
+                self._on_preview(text)
+            except Exception:
+                log.exception("on_preview callback raised")
 
     @staticmethod
     def _drain(q: queue.Queue) -> None:

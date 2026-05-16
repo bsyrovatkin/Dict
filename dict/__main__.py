@@ -238,14 +238,22 @@ def main() -> int:
             if w is not None:
                 w.append_partial(text)
 
+        def _on_preview(text: str) -> None:
+            w = window_holder.get("w")
+            if w is not None:
+                w.set_preview(text)
+
         from dict.streaming import VadStreamer
         from dict.paste import paste_text
         streamer = VadStreamer(
             transcriber=transcriber,
             on_partial=_on_partial,
+            on_preview=_on_preview,
             pause_ms=config.STREAM_PAUSE_MS,
             hard_cap_s=config.STREAM_HARD_CAP_S,
             hard_cap_elapsed_s=config.STREAM_HARD_CAP_ELAPSED_S,
+            preview_interval_s=config.PREVIEW_INTERVAL_S,
+            preview_window_s=config.PREVIEW_WINDOW_S,
             sample_rate=config.SAMPLE_RATE,
         )
 

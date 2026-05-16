@@ -38,6 +38,7 @@ class _WindowProto(Protocol):
     def show_for(self, seconds: float) -> None: ...
     def set_state(self, state: str) -> None: ...
     def append_partial(self, text: str) -> None: ...
+    def set_preview(self, text: str) -> None: ...
     def clear_partials(self) -> None: ...
 
 
@@ -119,6 +120,13 @@ class Controller:
             self._window.set_state("loading")
             self._tray.notify("Dict", "Model still loading — try again in a moment")
             return
+        # Clear the prior session's transcript so it doesn't bleed into this one.
+        # (We intentionally do NOT clear at the end of the previous session —
+        # the user wants the last result to persist until the next recording.)
+        try:
+            self._window.clear_partials()
+        except Exception:
+            log.exception("clear_partials at session start failed")
         try:
             self._recorder.set_push_callback(self._streamer.push)
             self._recorder.start()
@@ -178,10 +186,8 @@ class Controller:
             text = text.strip()
             if not text:
                 log.info("no text produced; returning to idle")
-                try:
-                    self._window.clear_partials()
-                except Exception:
-                    log.exception("clear_partials failed (continuing)")
+                # Leave whatever was already shown (likely empty) — the next
+                # session's _start_recording() will clear it.
                 self._return_to_idle()
                 return
             log.info("delivering %d chars", len(text))
@@ -197,10 +203,8 @@ class Controller:
                 self._clipboard_set(text)
             self._window.refresh()
             self._window.show_for(self._auto_show_seconds)
-            try:
-                self._window.clear_partials()
-            except Exception:
-                log.exception("clear_partials failed (continuing)")
+            # Intentionally NOT clearing partials here — the user wants the
+            # final transcript to remain visible until the next session begins.
             self._return_to_idle()
 
         self._spawn(worker)
