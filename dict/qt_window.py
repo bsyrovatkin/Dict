@@ -590,9 +590,11 @@ class MainWindow(QWidget):
         joined = (current + " " + text).strip() if current else text
         self._partials_label.setText(joined)
         self._partials_box.setVisible(True)
-        # Auto-scroll to bottom
-        bar = self._partials_box.verticalScrollBar()
-        bar.setValue(bar.maximum())
+        # Auto-scroll to bottom — defer so Qt recomputes the label height first
+        def _scroll_to_bottom() -> None:
+            bar = self._partials_box.verticalScrollBar()
+            bar.setValue(bar.maximum())
+        QTimer.singleShot(0, _scroll_to_bottom)
 
     def _apply_partials_cleared(self) -> None:
         self._partials_label.setText("")
