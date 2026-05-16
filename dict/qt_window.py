@@ -250,6 +250,8 @@ class MainWindow(QWidget):
     hotkey_label_changed = Signal(str)
     show_requested = Signal()
     toggle_requested = Signal()
+    partial_appended_signal = Signal(str)
+    partials_cleared_signal = Signal()
 
     def __init__(
         self,
@@ -290,6 +292,8 @@ class MainWindow(QWidget):
         self.hotkey_label_changed.connect(self._apply_hotkey_label)
         self.show_requested.connect(self._apply_show)
         self.toggle_requested.connect(self._apply_toggle)
+        self.partial_appended_signal.connect(self._apply_partial_appended)
+        self.partials_cleared_signal.connect(self._apply_partials_cleared)
 
     # ---- UI construction ----
 
@@ -315,6 +319,7 @@ class MainWindow(QWidget):
         inner.addLayout(self._build_header())
         inner.addWidget(self._build_record(), 1)
         inner.addWidget(self._build_status())
+        inner.addWidget(self._build_partials())
         inner.addWidget(self._build_history(), 0)
 
     def _build_header(self) -> QHBoxLayout:
@@ -372,6 +377,25 @@ class MainWindow(QWidget):
         self._status.setObjectName("status")
         self._status.setAlignment(Qt.AlignCenter)
         return self._status
+
+    def _build_partials(self) -> QWidget:
+        # ScrollArea containing a word-wrapped label. Hidden when empty.
+        from PySide6.QtWidgets import QScrollArea
+
+        self._partials_box = QScrollArea()
+        self._partials_box.setObjectName("partialsBox")
+        self._partials_box.setWidgetResizable(True)
+        self._partials_box.setMaximumHeight(120)
+        self._partials_box.setFrameShape(QScrollArea.NoFrame)
+
+        self._partials_label = QLabel("")
+        self._partials_label.setObjectName("partialsLabel")
+        self._partials_label.setWordWrap(True)
+        self._partials_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+
+        self._partials_box.setWidget(self._partials_label)
+        self._partials_box.setVisible(False)
+        return self._partials_box
 
     def _build_history(self) -> QWidget:
         box = QWidget()
@@ -435,6 +459,17 @@ class MainWindow(QWidget):
                 font-weight: bold;
                 letter-spacing: 2px;
                 padding: 4px 0 6px 0;
+            }}
+            #partialsBox {{
+                background-color: {BG_PANEL.name()};
+                border: 1px solid #122030;
+                border-radius: 8px;
+            }}
+            #partialsLabel {{
+                color: {FG.name()};
+                font-family: '{MONO}';
+                font-size: 10pt;
+                padding: 8px 10px;
             }}
             #historyPanel {{
                 background-color: {BG_PANEL.name()};
@@ -549,6 +584,25 @@ class MainWindow(QWidget):
             self.hide()
         else:
             self._apply_show()
+
+    def _apply_partial_appended(self, text: str) -> None:
+        current = self._partials_label.text()
+        joined = (current + " " + text).strip() if current else text
+        self._partials_label.setText(joined)
+        self._partials_box.setVisible(True)
+        # Auto-scroll to bottom
+        bar = self._partials_box.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    def _apply_partials_cleared(self) -> None:
+        self._partials_label.setText("")
+        self._partials_box.setVisible(False)
+
+    def append_partial(self, text: str) -> None:
+        self.partial_appended_signal.emit(text)
+
+    def clear_partials(self) -> None:
+        self.partials_cleared_signal.emit()
 
     def _on_history_item(self, item: QListWidgetItem) -> None:
         text = item.text().strip()
