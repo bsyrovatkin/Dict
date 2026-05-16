@@ -222,3 +222,25 @@ def test_streamer_drops_chunk_on_full_queue(monkeypatch, caplog):
     s.stop()
     # At least one drop warning should have been logged
     assert any("queue full" in r.message.lower() for r in caplog.records)
+
+
+def test_streamer_multi_cycle_no_cross_contamination(monkeypatch):
+    """Cycle start->push->stop twice on the same streamer instance — no leaked state."""
+    s, tx, on_partial = _make_streamer(monkeypatch)
+    # Cycle 1
+    s.start()
+    s.push(_chunk(WINDOW * 4, value=100))   # speech
+    text1 = s.stop()
+    assert text1, "first cycle should produce text"
+    # Cycle 2
+    s.start()
+    s.push(_chunk(WINDOW * 4, value=200))   # speech
+    text2 = s.stop()
+    assert text2, "second cycle should produce text"
+    # Second-cycle text should NOT contain first-cycle text (no carry-over)
+    # Each cycle's _FakeTranscriber call produced its own TX(size) string;
+    # but if _committed didn't reset, text2 would be "TX(x) TX(y)" not just one.
+    assert text1 not in text2 or text1 == text2  # benign equality if both same length
+
+    # Stronger: the transcriber should have been called twice, once per cycle
+    assert len(tx.calls) == 2

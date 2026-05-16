@@ -13,6 +13,10 @@ Three pieces:
 """
 from __future__ import annotations
 
+import queue
+import threading
+from typing import Callable, Optional
+
 import numpy as np
 
 from dict.utils_logging import get_logger
@@ -88,11 +92,6 @@ class _SegmentBuilder:
         return seg
 
 
-import queue
-import threading
-from typing import Callable, Optional
-
-
 class _VadAccumulator:
     """Wraps faster_whisper's bundled silero ONNX.
 
@@ -156,6 +155,8 @@ class VadStreamer:
         self._audio_q: queue.Queue = queue.Queue(maxsize=self.AUDIO_QUEUE_CAP)
         self._segments_q: queue.Queue = queue.Queue()
         self._committed: list[str] = []
+        self._committed_lock = threading.Lock()
+        self._last_stop_text: str = ""
         self._running = threading.Event()
         self._vad_thread: Optional[threading.Thread] = None
         self._tx_thread: Optional[threading.Thread] = None
@@ -176,11 +177,24 @@ class VadStreamer:
     def start(self) -> None:
         if self._running.is_set():
             return
-        self._committed = []
+        # I4 guard: refuse if previous threads are still alive
+        for name, t in (("vad", self._vad_thread), ("tx", self._tx_thread)):
+            if t is not None and t.is_alive():
+                raise RuntimeError(
+                    f"VadStreamer.start: previous {name} thread is still alive; "
+                    "stop() must complete before restart"
+                )
+        with self._committed_lock:
+            self._committed = []
+        self._last_stop_text = ""
         self._drain(self._audio_q)
         self._drain(self._segments_q)
         if self._passthrough:
             return
+        # M9: reset VAD internal buffer so leftover samples from prior session
+        # don't bleed into the next session's first window classification
+        if self._vad is not None:
+            self._vad._buf = np.zeros(0, dtype=np.float32)
         self._builder = _SegmentBuilder(
             pause_ms=self._pause_ms,
             hard_cap_s=self._hard_cap_s,
@@ -206,13 +220,24 @@ class VadStreamer:
 
     def stop(self) -> str:
         if self._passthrough or not self._running.is_set():
-            return ""
+            # I3: cache the joined text on first call so a second call returns same value
+            return self._last_stop_text
         self._running.clear()
         if self._vad_thread is not None:
             self._vad_thread.join(timeout=10.0)
+            if self._vad_thread.is_alive():
+                log.error("VadStreamer.stop: vad_thread did not join in 10s; leaking")
         if self._tx_thread is not None:
             self._tx_thread.join(timeout=60.0)
-        return " ".join(self._committed).strip()
+            if self._tx_thread.is_alive():
+                log.error(
+                    "VadStreamer.stop: tx_thread did not join in 60s; leaking — "
+                    "next start() will fail until thread exits"
+                )
+        with self._committed_lock:
+            text = " ".join(self._committed).strip()
+        self._last_stop_text = text
+        return text
 
     # ---- worker loops ----
 
@@ -267,7 +292,8 @@ class VadStreamer:
             text = (text or "").strip()
             if not text:
                 continue
-            self._committed.append(text)
+            with self._committed_lock:
+                self._committed.append(text)
             try:
                 self._on_partial(text)
             except Exception:
