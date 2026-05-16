@@ -244,9 +244,15 @@ def main() -> int:
                 w.set_preview(text)
 
         from dict.streaming import VadStreamer
+        from dict.preview_transcriber import PreviewTranscriber
         from dict.paste import paste_text
+        # Dedicated, fast (tiny) model just for in-flight previews. Quality is
+        # lower than the small commit model but ~5x faster on CPU, which is
+        # what makes the preview feel real-time.
+        preview_tx = PreviewTranscriber()
         streamer = VadStreamer(
             transcriber=transcriber,
+            preview_transcriber=preview_tx,
             on_partial=_on_partial,
             on_preview=_on_preview,
             pause_ms=config.STREAM_PAUSE_MS,
@@ -371,7 +377,17 @@ def main() -> int:
                 log.exception("initial model load failed")
                 window.set_state("error")
 
+        def warmup_preview() -> None:
+            log.info("warming up preview (tiny) model...")
+            try:
+                preview_tx.ensure_loaded()
+                log.info("preview model ready")
+            except Exception:
+                # Non-fatal: preview loop will fall back to the main model.
+                log.exception("preview model load failed; previews will use main model")
+
         threading.Thread(target=warmup, name="whisper-warmup", daemon=True).start()
+        threading.Thread(target=warmup_preview, name="preview-warmup", daemon=True).start()
 
         hotkey.start()
 

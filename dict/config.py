@@ -42,15 +42,20 @@ AUTO_SHOW_SECONDS = 2.0
 
 # Streaming / paste
 AUTO_PASTE = True            # send Ctrl+V into the focused field after transcription
-STREAM_PAUSE_MS = 200        # silence duration that commits a segment (aggressive — faster commits)
-STREAM_HARD_CAP_S = 3.0      # max speech-only seconds in a segment before forced commit
-STREAM_HARD_CAP_ELAPSED_S = 2.0  # wall-clock cap including inter-phrase pauses (faster real-time feel)
+# Quality-friendly VAD: aggressive timings here previously starved Whisper of
+# phrase context and produced garbage like "1, 2, 3, 4" or missing letters
+# ("Аплитуда" instead of "Амплитуда"). Whisper needs ~5–10s windows for its
+# best output; we still cap so the UI commits within a few seconds.
+STREAM_PAUSE_MS = 400        # silence duration that commits a segment
+STREAM_HARD_CAP_S = 6.0      # max speech-only seconds in a segment before forced commit
+STREAM_HARD_CAP_ELAPSED_S = 5.0  # wall-clock cap including inter-phrase pauses
 
-# Real-time preview transcription (sliding window on uncommitted audio)
-# Tuned for SPEED — preview should feel close to live captioning. Stability
-# filter in TranscriptPanel suppresses repaint when text didn't change much.
-PREVIEW_INTERVAL_S = 0.9     # how often to re-run Whisper on pending audio
-PREVIEW_WINDOW_S = 2.5       # transcribe the last N seconds of pending audio (smaller = faster Whisper)
+# Real-time preview transcription (sliding window on uncommitted audio).
+# A dedicated PreviewTranscriber (tiny model, see preview_transcriber.py) runs
+# this loop, so latency is already low — we can afford a wider window for
+# materially better preview quality.
+PREVIEW_INTERVAL_S = 1.0     # how often to re-run Whisper on pending audio
+PREVIEW_WINDOW_S = 5.0       # transcribe the last N seconds of pending audio
 
 # Icon filenames (inside ASSETS_DIR)
 ICON_FILES = {

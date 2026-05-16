@@ -219,10 +219,11 @@ class RecordWidget(QWidget):
         state = self._state
         if state in ("recording", "rec"):
             # Equalizer-style: drive segments from real input level + per-band
-            # response curves. Never fully flat — keep a generous floor so the
-            # ring is visibly alive even in silence (user feedback: "no
-            # animation visible during recording").
-            master = max(0.15, self._level)
+            # response curves. Real mic RMS rarely exceeds ~0.3 even on loud
+            # speech, so boost it 3x (capped at 1.0) and keep a generous floor
+            # so the ring is unmistakably alive even in silence. Without the
+            # boost the afterglow threshold (0.7) almost never fires.
+            master = max(0.22, min(1.0, self._level * 3.0))
             for i in range(self.VU_SEGMENTS):
                 # Sinusoidal band envelope, unique speed + phase per segment
                 band_env = 0.5 + 0.5 * math.sin(
@@ -300,6 +301,8 @@ class RecordWidget(QWidget):
         cy = 180.0
         col = self._state_palette(self._state)
         state = self._state
+        # Seconds clock — used by the decoding / idle / rec branches below.
+        t = self._t_ms / 1000.0
 
         # 1) Outer cardinal ticks (N/E/S/W from r=160 to r=174)
         pen = QPen(LINE_MID)
@@ -377,6 +380,11 @@ class RecordWidget(QWidget):
 
         # 6) Decoding multi-arc spinner + sonar pings (busy/transcribing only)
         if state in ("busy", "transcribing", "decoding"):
+            # Be explicit about composition mode here so any earlier paint
+            # operation can't leave us in a mode that erases what we draw.
+            from PySide6.QtGui import QPainter as _QP
+            p.setCompositionMode(_QP.CompositionMode_SourceOver)
+
             # --- Color drift: amber <-> faintly cooler amber/green mix ---
             # 0..1 swing every ~4s. Blend 80% amber + 20% green at peak.
             drift = (math.sin(t * (2 * math.pi / 4.0)) + 1.0) / 2.0
@@ -387,7 +395,16 @@ class RecordWidget(QWidget):
             mix_g = int(hi.green() * (1 - 0.20 * drift) + 0xff * 0.20 * drift)
             mix_b = int(hi.blue()  * (1 - 0.20 * drift) + 0xb3 * 0.20 * drift)
             mix_hi = QColor(mix_r, mix_g, mix_b)
-            mix_ink = QColor(mix_r, mix_g, mix_b, ink.alpha())
+            # Bright variant of mix_ink — original ink alpha (~115) reads as
+            # nearly invisible on the dark panel at 1.6px stroke.
+            mix_ink = QColor(mix_r, mix_g, mix_b, 180)
+
+            # --- Unmistakable amber backdrop fill so the user sees the state
+            # change immediately even before the arcs spin in. Faint ring fill
+            # at r=120 with ~10% amber alpha.
+            backdrop_col = QColor(hi.red(), hi.green(), hi.blue(), 28)
+            p.setBrush(QBrush(backdrop_col)); p.setPen(Qt.NoPen)
+            p.drawEllipse(QPointF(cx, cy), 120.0, 120.0)
 
             # --- Sonar pings: expanding fading rings r=58 -> r=170 ---
             for pg in self._pings:
@@ -395,21 +412,21 @@ class RecordWidget(QWidget):
                 k = age / 1600.0
                 if 0.0 <= k <= 1.0:
                     r_ping = 58.0 + (170.0 - 58.0) * k
-                    # Fade in then out, accentuating mid-life. Brighter than
-                    # before (220 cap, was 180) so pings are unmistakable.
-                    alpha = int(220.0 * (1.0 - k) * (0.4 + 0.6 * min(1.0, k * 2.5)))
+                    alpha = int(235.0 * (1.0 - k) * (0.4 + 0.6 * min(1.0, k * 2.5)))
                     pc = QColor(mix_hi.red(), mix_hi.green(), mix_hi.blue(), max(0, alpha))
-                    pen_p = QPen(pc); pen_p.setWidthF(2.4); pen_p.setCapStyle(Qt.RoundCap)
+                    pen_p = QPen(pc); pen_p.setWidthF(2.8); pen_p.setCapStyle(Qt.RoundCap)
                     p.setPen(pen_p); p.setBrush(Qt.NoBrush)
                     p.drawEllipse(QPointF(cx, cy), r_ping, r_ping)
 
             # --- Multi-arc spinner: three short arcs, different radii/speed/dir ---
-            # Widened arc spans + thicker strokes so the spinner reads clearly
-            # even at a glance (user feedback: "круг пропал в decoding").
+            # Widened arc spans + much thicker, fully-opaque strokes so the
+            # spinner is unmistakable even at a glance. Previous 1.6–2.6px
+            # widths at partial alpha were invisible in the screenshot the
+            # user shared.
             specs = (
-                (110.0, +2.4, 0.55 * math.pi, 0.00, hi,      2.6),  # outer, bright
-                ( 95.0, -1.6, 0.55 * math.pi, 1.10, mix_hi,  2.0),  # middle, drifty
-                ( 80.0, +1.1, 0.45 * math.pi, 2.20, mix_ink, 1.6),  # inner, soft
+                (110.0, +2.4, 0.55 * math.pi, 0.00, QColor(hi.red(), hi.green(), hi.blue(), 255),     4.0),  # outer, bright
+                ( 95.0, -1.6, 0.55 * math.pi, 1.10, QColor(mix_hi.red(), mix_hi.green(), mix_hi.blue(), 220), 3.4),  # middle, drifty
+                ( 80.0, +1.1, 0.45 * math.pi, 2.20, mix_ink, 3.0),  # inner, soft but visible
             )
             for r_arc, omega, span_rad, phase0, color, width in specs:
                 a0 = (t * omega + phase0) % (2 * math.pi)
@@ -424,8 +441,8 @@ class RecordWidget(QWidget):
             beam_a = (t * 2.0) % (2 * math.pi)
             beam_dx = math.cos(beam_a - math.pi / 2) * 110.0
             beam_dy = math.sin(beam_a - math.pi / 2) * 110.0
-            beam_col = QColor(hi.red(), hi.green(), hi.blue(), 153)  # ~0.6 alpha
-            pen_beam = QPen(beam_col); pen_beam.setWidthF(1.5); pen_beam.setCapStyle(Qt.RoundCap)
+            beam_col = QColor(hi.red(), hi.green(), hi.blue(), 200)
+            pen_beam = QPen(beam_col); pen_beam.setWidthF(2.0); pen_beam.setCapStyle(Qt.RoundCap)
             p.setPen(pen_beam); p.setBrush(Qt.NoBrush)
             p.drawLine(QPointF(cx, cy), QPointF(cx + beam_dx, cy + beam_dy))
 
@@ -434,7 +451,7 @@ class RecordWidget(QWidget):
         gap_deg = 1.8 if seg >= 72 else 2.4
         seg_deg = (360.0 / seg) - gap_deg
         base_r = 84.0
-        max_h = 38.0  # was 30 — even more breathing room for the REC equalizer
+        max_h = 45.0  # was 38 — REC equalizer pops more
         for i in range(seg):
             v = max(0.0, min(1.0, self._vu[i]))
             h = 2.0 + v * max_h
@@ -456,8 +473,8 @@ class RecordWidget(QWidget):
                     c = col["mid"]
             # Stroke width approximates arc segment width (cap removed)
             # JSX computes width based on circumference; reproduce conservatively.
-            stroke_w = max(1.6, (2.0 * math.pi * r_mid) / seg - gap_deg * math.pi / 180.0 * r_mid)
-            stroke_w = max(1.4, stroke_w * 0.9)
+            stroke_w = max(2.0, (2.0 * math.pi * r_mid) / seg - gap_deg * math.pi / 180.0 * r_mid)
+            stroke_w = max(2.0, stroke_w * 0.9)
             pen = QPen(c)
             pen.setWidthF(stroke_w)
             pen.setCapStyle(Qt.FlatCap)
@@ -580,16 +597,25 @@ class RecordWidget(QWidget):
             p.setPen(pen_r); p.setBrush(Qt.NoBrush)
             p.drawEllipse(QPointF(cx, cy), outer_r, outer_r)
 
-            # Three deeply pulsing dots (0.2 .. 1.0 alpha range)
-            for i in (-1, 0, 1):
-                pulse = (math.sin(t * 4 - i) + 1.0) / 2.0
-                dot_col = QColor(col["hi"])
-                dot_col.setAlphaF(min(1.0, 0.2 + 0.8 * pulse))
-                p.setBrush(QBrush(dot_col))
+            # --- Unmissable amber center indicator ("the yellow ball") ---
+            # The previous tiny 3-dot pulse was easy to miss. A large solid
+            # amber circle in the dead center makes the decoding state obvious
+            # without competing with the orbiting/sonar elements.
+            pulse_core = (math.sin(t * 2.4) + 1.0) / 2.0
+            core_r = 9.0 + 5.0 * pulse_core
+            core_col = QColor(col["hi"])
+            core_col.setAlphaF(0.85 + 0.15 * pulse_core)
+            p.setBrush(QBrush(core_col)); p.setPen(Qt.NoPen)
+            p.drawEllipse(QPointF(cx, cy), core_r, core_r)
+
+            # --- Three dots orbiting around the central core ---
+            for i in range(3):
+                orbit_a = t * 1.6 + (i * 2 * math.pi / 3)
+                ox = cx + math.cos(orbit_a) * 22.0
+                oy = cy + math.sin(orbit_a) * 22.0
+                p.setBrush(QBrush(col["hi"]))
                 p.setPen(Qt.NoPen)
-                # Dot size also breathes slightly with the pulse
-                rr = 3.0 + 0.6 * pulse
-                p.drawEllipse(QPointF(cx + i * 12, cy), rr, rr)
+                p.drawEllipse(QPointF(ox, oy), 3.2, 3.2)
 
         # 12) Center crosshair (tiny +)
         pen = QPen(QColor(205, 215, 235, int(0.25 * 255)))

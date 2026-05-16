@@ -186,8 +186,12 @@ class VadStreamer:
         on_preview: Optional[Callable[[str], None]] = None,
         preview_interval_s: float = 1.5,
         preview_window_s: float = 4.0,
+        preview_transcriber=None,
     ):
         self._transcriber = transcriber
+        # Optional, faster (tiny) model used exclusively in the preview loop.
+        # Falls back to the main transcriber if None.
+        self._preview_transcriber = preview_transcriber
         self._on_partial = on_partial
         self._on_preview = on_preview
         self._preview_interval_s = preview_interval_s
@@ -388,8 +392,12 @@ class VadStreamer:
             # Need at least 0.4s of pending audio to be worth transcribing.
             if audio is None or audio.size < int(self._sample_rate * 0.4):
                 continue
+            # Prefer the dedicated (tiny) preview transcriber when available;
+            # otherwise fall back to the main one. Both expose
+            # `.transcribe(int16 ndarray) -> str`.
+            tx = self._preview_transcriber or self._transcriber
             try:
-                text = self._transcriber.transcribe(audio)
+                text = tx.transcribe(audio)
             except Exception:
                 log.exception("preview transcribe failed; continuing")
                 continue
