@@ -20,3 +20,15 @@ def test_transcribe_tone_returns_some_string_not_crash():
     samples = (0.5 * 32767 * np.sin(2 * np.pi * 440 * np.arange(16000) / 16000)).astype(np.int16)
     result = t.transcribe(samples)
     assert isinstance(result, str)
+
+
+def test_transcriber_is_loaded_false_before_load():
+    t = Transcriber()
+    assert t.is_loaded is False
+
+
+@pytest.mark.slow
+def test_transcriber_is_loaded_true_after_load():
+    t = Transcriber()
+    t.ensure_loaded()
+    assert t.is_loaded is True

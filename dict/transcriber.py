@@ -42,6 +42,10 @@ class Transcriber:
         self._model: object | None = None
         self._load_lock = threading.Lock()
 
+    @property
+    def is_loaded(self) -> bool:
+        return self._model is not None
+
     def ensure_loaded(self) -> None:
         if self._model is not None:
             return
