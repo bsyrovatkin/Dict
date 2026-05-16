@@ -40,6 +40,11 @@ from PySide6.QtWidgets import (
 )
 
 from dict.history import History
+from dict.qt_design import LINE_DIM, SURFACE_1, state_color
+from dict.qt_widgets.compact_history import CompactHistory
+from dict.qt_widgets.cta_bar import CTABar
+from dict.qt_widgets.status_strip import StatusStrip
+from dict.qt_widgets.transcript_panel import TranscriptPanel
 from dict.utils_logging import get_logger
 
 log = get_logger(__name__)
@@ -509,28 +514,59 @@ class MainWindow(QWidget):
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setContentsMargins(0, 0, 0, 0)
 
-        # Rounded panel container
+        # Panel container with state-tinted drop shadow
         self._panel = QWidget(self)
         self._panel.setObjectName("panel")
         shadow = QGraphicsDropShadowEffect(self._panel)
-        shadow.setBlurRadius(40)
-        shadow.setColor(QColor(0, 229, 255, 80))
+        shadow.setBlurRadius(70)
+        idle_col = state_color("idle")
+        shadow.setColor(QColor(idle_col.red(), idle_col.green(), idle_col.blue(), 51))
         shadow.setOffset(0, 0)
         self._panel.setGraphicsEffect(shadow)
-
+        self._panel_shadow = shadow
         outer.addWidget(self._panel)
 
         inner = QVBoxLayout(self._panel)
-        inner.setContentsMargins(16, 12, 16, 16)
-        inner.setSpacing(8)
+        inner.setContentsMargins(0, 0, 0, 0)
+        inner.setSpacing(0)
 
+        # Header (existing — restyled in Task 4)
         inner.addLayout(self._build_header())
-        inner.addWidget(self._build_record(), 1)
-        inner.addWidget(self._build_status())
-        inner.addWidget(self._build_partials())
-        inner.addWidget(self._build_history(), 0)
+
+        # Capture zone: record widget on the left, status strip on the right
+        cap = QWidget()
+        cap.setStyleSheet(
+            f"background-color: transparent; "
+            f"border-bottom: 1px solid {LINE_DIM.name(QColor.HexArgb)};"
+        )
+        ch = QHBoxLayout(cap)
+        ch.setContentsMargins(18, 12, 18, 8)
+        ch.setSpacing(18)
+        self._record_widget = RecordWidget()
+        self._record_widget.setFixedSize(200, 200)
+        self._record_widget.clicked.connect(self._on_toggle)
+        self._status_strip = StatusStrip()
+        ch.addWidget(self._record_widget, 0)
+        ch.addWidget(self._status_strip, 1)
+        inner.addWidget(cap)
+
+        # CTA bar
+        self._cta = CTABar(self._hotkey_label)
+        inner.addWidget(self._cta)
+
+        # Transcript panel (flex: 1)
+        trx_wrapper = QWidget()
+        tw = QVBoxLayout(trx_wrapper)
+        tw.setContentsMargins(16, 10, 16, 8)
+        self._transcript_panel = TranscriptPanel()
+        tw.addWidget(self._transcript_panel, 1)
+        inner.addWidget(trx_wrapper, 1)
+
+        # Compact history at the bottom
+        self._compact_history = CompactHistory(self._history, on_copy=self._on_copy)
+        inner.addWidget(self._compact_history)
 
     def _build_header(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -577,59 +613,12 @@ class MainWindow(QWidget):
         row.addWidget(self._close_btn)
         return row
 
-    def _build_record(self) -> QWidget:
-        self._record_widget = RecordWidget()
-        self._record_widget.clicked.connect(self._on_toggle)
-        return self._record_widget
-
-    def _build_status(self) -> QLabel:
-        self._status = QLabel("INIT…")
-        self._status.setObjectName("status")
-        self._status.setAlignment(Qt.AlignCenter)
-        return self._status
-
-    def _build_partials(self) -> QWidget:
-        # ScrollArea containing a word-wrapped label. Hidden when empty.
-        from PySide6.QtWidgets import QScrollArea
-
-        self._partials_box = QScrollArea()
-        self._partials_box.setObjectName("partialsBox")
-        self._partials_box.setWidgetResizable(True)
-        self._partials_box.setMaximumHeight(120)
-        self._partials_box.setFrameShape(QScrollArea.NoFrame)
-
-        self._partials_label = QLabel("")
-        self._partials_label.setObjectName("partialsLabel")
-        self._partials_label.setWordWrap(True)
-        self._partials_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-
-        self._partials_box.setWidget(self._partials_label)
-        self._partials_box.setVisible(False)
-        return self._partials_box
-
-    def _build_history(self) -> QWidget:
-        box = QWidget()
-        box.setObjectName("historyPanel")
-        lay = QVBoxLayout(box)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
-
-        label = QLabel("▸ HISTORY   (click a row to copy)")
-        label.setObjectName("historyLabel")
-        lay.addWidget(label)
-
-        self._history_list = QListWidget()
-        self._history_list.setObjectName("historyList")
-        self._history_list.itemClicked.connect(self._on_history_item)
-        lay.addWidget(self._history_list)
-        return box
-
     def _apply_styles(self) -> None:
         self.setStyleSheet(f"""
             #panel {{
-                background-color: {BG.name()};
-                border: 1px solid #1a3a5a;
-                border-radius: 14px;
+                background-color: {SURFACE_1.name()};
+                border: 1px solid {LINE_DIM.name(QColor.HexArgb)};
+                border-radius: 0px;
             }}
             #title {{
                 color: {CYAN.name()};
@@ -661,57 +650,6 @@ class MainWindow(QWidget):
             #closebtn:hover {{
                 color: {RED.name()};
                 border-color: {RED.name()};
-            }}
-            #status {{
-                color: {CYAN.name()};
-                font-family: '{MONO}';
-                font-size: 12px;
-                font-weight: bold;
-                letter-spacing: 2px;
-                padding: 4px 0 6px 0;
-            }}
-            #partialsBox {{
-                background-color: {BG_PANEL.name()};
-                border: 1px solid #122030;
-                border-radius: 8px;
-            }}
-            #partialsLabel {{
-                color: {FG.name()};
-                font-family: '{MONO}';
-                font-size: 10pt;
-                padding: 8px 10px;
-            }}
-            #historyPanel {{
-                background-color: {BG_PANEL.name()};
-                border: 1px solid #122030;
-                border-radius: 8px;
-            }}
-            #historyLabel {{
-                color: {CYAN_DIM.name()};
-                font-family: '{MONO}';
-                font-size: 9px;
-                font-weight: bold;
-                padding: 8px 10px 4px 10px;
-                letter-spacing: 1px;
-            }}
-            #historyList {{
-                background: transparent;
-                border: none;
-                color: {FG.name()};
-                font-family: '{MONO}';
-                font-size: 10pt;
-                padding: 0 6px 6px 6px;
-            }}
-            #historyList::item {{
-                padding: 6px 8px;
-                border-radius: 4px;
-            }}
-            #historyList::item:hover {{
-                background-color: #0f2a3a;
-            }}
-            #historyList::item:selected {{
-                background-color: {CYAN.name()};
-                color: {BG.name()};
             }}
         """)
 
@@ -762,25 +700,20 @@ class MainWindow(QWidget):
 
     def _apply_state(self, state: str) -> None:
         self._record_widget.set_state(state)
-        self._status.setText(STATE_TEXT.get(state, "READY"))
-        self._status.setStyleSheet(
-            f"color: {STATE_COLOR.get(state, CYAN).name()}; "
-            f"font-family: '{MONO}'; font-size: 12px; font-weight: bold; "
-            f"letter-spacing: 2px;"
-        )
+        self._status_strip.set_state(state)
+        self._cta.set_state(state)
+        self._transcript_panel.set_state(state)
 
     def _apply_level(self, level: float) -> None:
         self._record_widget.set_level(level)
+        self._status_strip.set_level(level)
 
     def _apply_refresh(self) -> None:
-        self._history_list.clear()
-        for entry in self._history.items():
-            ts = entry.timestamp.strftime("%H:%M:%S")
-            item = QListWidgetItem(f"  {ts}   {entry.text}")
-            self._history_list.addItem(item)
+        self._compact_history.refresh()
 
     def _apply_hotkey_label(self, label: str) -> None:
         self._hotkey_badge.setText(f"[ {label} ]")
+        self._cta.set_hotkey(label)
 
     def _apply_show(self) -> None:
         # HUD style: show on top but never steal focus from the user's
@@ -796,32 +729,13 @@ class MainWindow(QWidget):
             self._apply_show()
 
     def _apply_partial_appended(self, text: str) -> None:
-        current = self._partials_label.text()
-        joined = (current + " " + text).strip() if current else text
-        self._partials_label.setText(joined)
-        self._partials_box.setVisible(True)
-        # Auto-scroll to bottom — defer so Qt recomputes the label height first
-        def _scroll_to_bottom() -> None:
-            bar = self._partials_box.verticalScrollBar()
-            bar.setValue(bar.maximum())
-        QTimer.singleShot(0, _scroll_to_bottom)
+        self._transcript_panel.append_partial(text)
 
     def _apply_partials_cleared(self) -> None:
-        self._partials_label.setText("")
-        self._partials_box.setVisible(False)
+        self._transcript_panel.clear()
 
     def append_partial(self, text: str) -> None:
         self.partial_appended_signal.emit(text)
 
     def clear_partials(self) -> None:
         self.partials_cleared_signal.emit()
-
-    def _on_history_item(self, item: QListWidgetItem) -> None:
-        text = item.text().strip()
-        # Drop the timestamp prefix: "HH:MM:SS   <text>"
-        parts = text.split("   ", 1)
-        payload = parts[1] if len(parts) == 2 else text
-        try:
-            self._on_copy(payload)
-        except Exception:
-            log.exception("on_copy failed")
