@@ -75,3 +75,150 @@ def test_builder_handles_multiple_speech_silence_cycles():
     b.feed(speech, [True] * 4)
     seg2 = b.feed(silence, [False] * 16)
     assert len(seg2) == 1
+
+
+import threading
+import time
+from unittest.mock import MagicMock
+
+from dict.streaming import VadStreamer
+
+
+class _FakeTranscriber:
+    """Returns 'TX(<len>)' per segment so tests can verify partial wiring."""
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+
+    def transcribe(self, audio: np.ndarray) -> str:
+        self.calls.append(audio.size)
+        return f"TX({audio.size})"
+
+
+def _make_streamer(
+    monkeypatch,
+    *,
+    transcriber=None,
+    on_partial=None,
+    pause_ms: int = 500,
+    hard_cap_s: float = 12.0,
+    passthrough: bool = False,
+):
+    """Build a VadStreamer with the VAD layer mocked.
+
+    The fake VAD treats any chunk with samples != 0 as speech.
+    """
+    if transcriber is None:
+        transcriber = _FakeTranscriber()
+    if on_partial is None:
+        on_partial = MagicMock()
+
+    class _FakeVad:
+        def add(self, chunk_int16):
+            n_windows = chunk_int16.size // WINDOW
+            return [bool(np.any(chunk_int16[i*WINDOW:(i+1)*WINDOW]))
+                    for i in range(n_windows)]
+
+    def _fake_factory():
+        if passthrough:
+            raise RuntimeError("forced VAD load failure")
+        return _FakeVad()
+
+    monkeypatch.setattr("dict.streaming._make_vad_accumulator", _fake_factory)
+
+    s = VadStreamer(
+        transcriber=transcriber,
+        on_partial=on_partial,
+        pause_ms=pause_ms,
+        hard_cap_s=hard_cap_s,
+        sample_rate=SR,
+    )
+    return s, transcriber, on_partial
+
+
+def test_streamer_emits_partial_on_silence_then_speech(monkeypatch):
+    s, tx, on_partial = _make_streamer(monkeypatch, pause_ms=500, hard_cap_s=12.0)
+    s.start()
+    try:
+        s.push(_chunk(WINDOW * 4, value=100))      # speech
+        s.push(_chunk(WINDOW * 16, value=0))       # silence -> commit
+        s.push(_chunk(WINDOW * 4, value=200))      # speech
+        s.push(_chunk(WINDOW * 16, value=0))       # silence -> commit
+        # Wait for tx_loop to drain
+        for _ in range(50):
+            if on_partial.call_count >= 2:
+                break
+            time.sleep(0.05)
+    finally:
+        text = s.stop()
+    assert on_partial.call_count >= 2
+    assert text.startswith("TX(") or "TX(" in text
+
+
+def test_streamer_stop_flushes_pending(monkeypatch):
+    s, tx, on_partial = _make_streamer(monkeypatch, pause_ms=500, hard_cap_s=12.0)
+    s.start()
+    s.push(_chunk(WINDOW * 4, value=100))   # speech only, no trailing silence
+    text = s.stop()
+    assert text  # something was transcribed
+    assert tx.calls  # transcriber was called at least once
+
+
+def test_streamer_returns_empty_in_passthrough_mode(monkeypatch):
+    s, tx, on_partial = _make_streamer(monkeypatch, passthrough=True)
+    assert s.is_passthrough is True
+    s.start()
+    s.push(_chunk(WINDOW * 4, value=100))
+    text = s.stop()
+    assert text == ""
+    assert tx.calls == []  # no transcribe attempted in passthrough
+
+
+def test_streamer_continues_after_transcribe_exception(monkeypatch):
+    class _FlakyTx:
+        def __init__(self):
+            self.n = 0
+        def transcribe(self, audio):
+            self.n += 1
+            if self.n == 1:
+                raise RuntimeError("first call blows up")
+            return f"ok-{self.n}"
+
+    tx = _FlakyTx()
+    s, _, on_partial = _make_streamer(monkeypatch, transcriber=tx)
+    s.start()
+    try:
+        # Segment 1 — will raise
+        s.push(_chunk(WINDOW * 4, value=100))
+        s.push(_chunk(WINDOW * 16, value=0))
+        # Segment 2 — should succeed
+        s.push(_chunk(WINDOW * 4, value=100))
+        s.push(_chunk(WINDOW * 16, value=0))
+        for _ in range(50):
+            if on_partial.call_count >= 1:
+                break
+            time.sleep(0.05)
+    finally:
+        text = s.stop()
+    on_partial.assert_called_once_with("ok-2")
+    assert text == "ok-2"
+
+
+def test_streamer_push_after_stop_is_noop(monkeypatch):
+    s, _, _ = _make_streamer(monkeypatch)
+    s.start()
+    s.stop()
+    # Should not raise
+    s.push(_chunk(WINDOW * 4, value=100))
+
+
+def test_streamer_drops_chunk_on_full_queue(monkeypatch, caplog):
+    s, _, _ = _make_streamer(monkeypatch)
+    # Shrink the queue so we can fill it cheaply
+    s._audio_q = __import__("queue").Queue(maxsize=2)
+    s.start()
+    # Don't let vad thread consume — push fast
+    for _ in range(10):
+        s.push(_chunk(WINDOW * 4, value=100))
+    s.stop()
+    # At least one drop warning should have been logged
+    assert any("queue full" in r.message.lower() for r in caplog.records)

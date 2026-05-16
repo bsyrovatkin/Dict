@@ -86,3 +86,197 @@ class _SegmentBuilder:
         self._silence_run = 0
         self._speech_total = 0
         return seg
+
+
+import queue
+import threading
+from typing import Callable, Optional
+
+
+class _VadAccumulator:
+    """Wraps faster_whisper's bundled silero ONNX.
+
+    Accepts int16 audio in chunks of arbitrary size. Buffers the remainder
+    if the chunk is not a multiple of 512 samples. Returns one bool per
+    completed 512-sample window.
+    """
+
+    def __init__(self, threshold: float = 0.5):
+        # Lazy local import so module load doesn't pull onnxruntime if unused
+        from faster_whisper.utils import get_assets_path
+        from faster_whisper.vad import SileroVADModel
+        import os
+
+        path = os.path.join(get_assets_path(), "silero_vad_v6.onnx")
+        self._model = SileroVADModel(path)
+        self._threshold = threshold
+        self._buf = np.zeros(0, dtype=np.float32)
+
+    def add(self, chunk_int16: np.ndarray) -> list[bool]:
+        f = chunk_int16.astype(np.float32) / 32768.0
+        self._buf = np.concatenate([self._buf, f])
+        n = (self._buf.size // _VAD_WINDOW) * _VAD_WINDOW
+        if n == 0:
+            return []
+        usable = self._buf[:n]
+        self._buf = self._buf[n:]
+        probs = self._model(usable, num_samples=_VAD_WINDOW)
+        return [bool(p >= self._threshold) for p in probs.flatten()]
+
+
+def _make_vad_accumulator() -> _VadAccumulator:
+    """Factory indirection so tests can monkeypatch this single function."""
+    return _VadAccumulator()
+
+
+class VadStreamer:
+    """Streaming-VAD pipeline. Two worker threads + queues.
+
+    Lifecycle:
+      start()         -> spawn vad_loop and tx_loop threads
+      push(chunk)     -> non-blocking enqueue (drops chunks if queue full)
+      stop()          -> flush, join workers, return joined committed text
+    """
+
+    AUDIO_QUEUE_CAP = 200   # ~ chunks; PortAudio typically delivers ~50ms chunks
+
+    def __init__(
+        self,
+        transcriber,
+        on_partial: Callable[[str], None],
+        pause_ms: int = 500,
+        hard_cap_s: float = 12.0,
+        sample_rate: int = 16000,
+    ):
+        self._transcriber = transcriber
+        self._on_partial = on_partial
+        self._pause_ms = pause_ms
+        self._hard_cap_s = hard_cap_s
+        self._sample_rate = sample_rate
+        self._audio_q: queue.Queue = queue.Queue(maxsize=self.AUDIO_QUEUE_CAP)
+        self._segments_q: queue.Queue = queue.Queue()
+        self._committed: list[str] = []
+        self._running = threading.Event()
+        self._vad_thread: Optional[threading.Thread] = None
+        self._tx_thread: Optional[threading.Thread] = None
+        self._vad: Optional[_VadAccumulator] = None
+        self._builder: Optional[_SegmentBuilder] = None
+        self._passthrough = False
+
+        try:
+            self._vad = _make_vad_accumulator()
+        except Exception:
+            log.exception("silero VAD unavailable; streamer in passthrough mode")
+            self._passthrough = True
+
+    @property
+    def is_passthrough(self) -> bool:
+        return self._passthrough
+
+    def start(self) -> None:
+        if self._running.is_set():
+            return
+        self._committed = []
+        self._drain(self._audio_q)
+        self._drain(self._segments_q)
+        if self._passthrough:
+            return
+        self._builder = _SegmentBuilder(
+            pause_ms=self._pause_ms,
+            hard_cap_s=self._hard_cap_s,
+            sample_rate=self._sample_rate,
+        )
+        self._running.set()
+        self._vad_thread = threading.Thread(
+            target=self._vad_loop, name="vad-loop", daemon=True
+        )
+        self._tx_thread = threading.Thread(
+            target=self._tx_loop, name="tx-loop", daemon=True
+        )
+        self._vad_thread.start()
+        self._tx_thread.start()
+
+    def push(self, chunk: np.ndarray) -> None:
+        if self._passthrough or not self._running.is_set():
+            return
+        try:
+            self._audio_q.put_nowait(chunk)
+        except queue.Full:
+            log.warning("vad audio queue full, dropping chunk")
+
+    def stop(self) -> str:
+        if self._passthrough or not self._running.is_set():
+            return ""
+        self._running.clear()
+        if self._vad_thread is not None:
+            self._vad_thread.join(timeout=10.0)
+        if self._tx_thread is not None:
+            self._tx_thread.join(timeout=60.0)
+        return " ".join(self._committed).strip()
+
+    # ---- worker loops ----
+
+    def _vad_loop(self) -> None:
+        while True:
+            try:
+                chunk = self._audio_q.get(timeout=0.05)
+            except queue.Empty:
+                if not self._running.is_set():
+                    break
+                continue
+            try:
+                flags = self._vad.add(chunk)
+                segments = self._builder.feed(chunk, flags)
+                for seg in segments:
+                    self._segments_q.put(seg)
+            except Exception:
+                log.exception("vad_loop processing failed; dropping chunk")
+        # Drain whatever's left in the queue (we cleared _running)
+        while True:
+            try:
+                chunk = self._audio_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                flags = self._vad.add(chunk)
+                segments = self._builder.feed(chunk, flags)
+                for seg in segments:
+                    self._segments_q.put(seg)
+            except Exception:
+                log.exception("vad_loop drain failed; dropping chunk")
+        # Final flush
+        try:
+            tail = self._builder.flush()
+            if tail is not None and tail.size > 0:
+                self._segments_q.put(tail)
+        except Exception:
+            log.exception("vad_loop flush failed")
+        # Sentinel for tx_loop
+        self._segments_q.put(None)
+
+    def _tx_loop(self) -> None:
+        while True:
+            seg = self._segments_q.get()
+            if seg is None:
+                return
+            try:
+                text = self._transcriber.transcribe(seg)
+            except Exception:
+                log.exception("transcribe failed on segment; skipping")
+                continue
+            text = (text or "").strip()
+            if not text:
+                continue
+            self._committed.append(text)
+            try:
+                self._on_partial(text)
+            except Exception:
+                log.exception("on_partial callback raised")
+
+    @staticmethod
+    def _drain(q: queue.Queue) -> None:
+        while True:
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                return
