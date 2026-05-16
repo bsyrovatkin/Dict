@@ -455,6 +455,410 @@ class RecordWidget(QWidget):
         p.drawLine(QPointF(cx, cy - 3), QPointF(cx, cy + 3))
 
 
+# ---------- Header sub-widgets ---------------------------------------------
+
+class _BrandMark(QWidget):
+    """18×18 SVG-equivalent: outer ring + semi-transparent inner ring + filled dot.
+
+    Colors driven by state via set_state().
+    """
+    SIZE = 22  # actual widget pixels (slightly larger hit-box around the 18px art)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self._state = "idle"
+
+    def set_state(self, state: str) -> None:
+        self._state = state
+        self.update()
+
+    def paintEvent(self, _ev) -> None:
+        from dict.qt_design import LINE_MID, state_color
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        cx = self.width() / 2.0
+        cy = self.height() / 2.0
+        col = state_color(self._state)
+
+        # Outer ring: radius 7.5, LINE_MID stroke
+        outer_pen = QPen(QColor(138, 149, 172, int(0.4 * 255)))
+        outer_pen.setWidthF(1.0)
+        p.setPen(outer_pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(QPointF(cx, cy), 7.5, 7.5)
+
+        # Inner ring: radius 5, 50% alpha state-colored
+        inner_col = QColor(col)
+        inner_col.setAlphaF(0.5)
+        inner_pen = QPen(inner_col)
+        inner_pen.setWidthF(1.0)
+        p.setPen(inner_pen)
+        p.drawEllipse(QPointF(cx, cy), 5.0, 5.0)
+
+        # Center filled dot: radius 3, state-colored
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(col))
+        p.drawEllipse(QPointF(cx, cy), 3.0, 3.0)
+
+
+class _HotkeySlab(QWidget):
+    """Clipped-polygon slab showing 'HOTKEY <key>' in mono 7pt.
+
+    Mirrors the JSX hotkey slab: 6px corner cuts on TL + BR,
+    border rgba(138,149,172,0.28), no fill.
+    HOTKEY in TEXT_DIM, key in TEXT_HI.
+    """
+
+    def __init__(self, label: str = "F9", parent=None) -> None:
+        super().__init__(parent)
+        self._label = label.upper()
+        self.setContentsMargins(8, 3, 8, 3)
+
+    def set_label(self, label: str) -> None:
+        self._label = label.upper()
+        self.updateGeometry()
+        self.update()
+
+    def sizeHint(self) -> QSize:
+        from dict.qt_design import FONT_MONO
+        fm_dim = self.fontMetrics()
+        f = QFont(FONT_MONO)
+        f.setPointSize(7)
+        from PySide6.QtGui import QFontMetrics
+        fm = QFontMetrics(f)
+        w = fm.horizontalAdvance("HOTKEY ") + fm.horizontalAdvance(self._label) + 16 + 4
+        h = fm.height() + 6
+        return QSize(max(w, 50), max(h, 18))
+
+    def paintEvent(self, _ev) -> None:
+        from dict.qt_design import TEXT_DIM, TEXT_HI, FONT_MONO
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        r = self.rect()
+
+        # Build 6px clipped polygon (TL + BR corners cut)
+        cut = 6
+        path = QPainterPath()
+        path.moveTo(r.x() + cut, r.y())
+        path.lineTo(r.right(), r.y())
+        path.lineTo(r.right(), r.bottom() - cut)
+        path.lineTo(r.right() - cut, r.bottom())
+        path.lineTo(r.x(), r.bottom())
+        path.lineTo(r.x(), r.y() + cut)
+        path.closeSubpath()
+
+        pen = QPen(QColor(138, 149, 172, int(0.28 * 255)))
+        pen.setWidthF(1.0)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(path)
+
+        # Draw text: "HOTKEY " in dim, then label in hi
+        f = QFont(FONT_MONO)
+        f.setPointSize(7)
+        from PySide6.QtGui import QFontMetrics
+        fm = QFontMetrics(f)
+        p.setFont(f)
+
+        prefix = "HOTKEY "
+        prefix_w = fm.horizontalAdvance(prefix)
+        text_h = fm.height()
+        # Vertically center
+        ty = r.y() + (r.height() - text_h) // 2 + fm.ascent()
+        tx = r.x() + 8
+
+        p.setPen(TEXT_DIM)
+        p.drawText(tx, ty, prefix)
+        p.setPen(TEXT_HI)
+        p.drawText(tx + prefix_w, ty, self._label)
+
+
+class _StatusPill(QWidget):
+    """Animated status pill: clipped polygon (8px cuts), border+tinted fill.
+
+    States:
+      idle     → small diamond (square rotated 45°), accent color, READY label
+      rec      → pulsing filled dot (sin on radius), CRIMSON, REC label
+      decoding → rotating arc (top-border-only), AMBER, DECODING label
+    """
+    _TIMER_INTERVAL_MS = 33  # ~30 fps
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._state = "idle"
+        self._phase = 0.0   # for pulse (rec) and spin (decoding)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(self._TIMER_INTERVAL_MS)
+        self.setContentsMargins(8, 4, 10, 4)
+
+    def set_state(self, state: str) -> None:
+        self._state = state
+        self._phase = 0.0
+        self.update()
+
+    def _tick(self) -> None:
+        self._phase += 0.105  # ~3.2 rad/s at 30 fps — good for both pulse and spin
+        self.update()
+
+    def sizeHint(self) -> QSize:
+        from dict.qt_design import FONT_RAJDHANI
+        f = QFont(FONT_RAJDHANI)
+        f.setPointSize(7)
+        f.setWeight(QFont.Bold)
+        from PySide6.QtGui import QFontMetrics
+        fm = QFontMetrics(f)
+        max_label = "DECODING"
+        w = 8 + 8 + 6 + fm.horizontalAdvance(max_label) + 10 + 8  # marker + gap + text + pad
+        h = max(22, fm.height() + 8)
+        return QSize(w, h)
+
+    def paintEvent(self, _ev) -> None:
+        from dict.qt_design import state_color, FONT_RAJDHANI
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        r = self.rect()
+        state = self._state
+        col = state_color(state)
+
+        # --- Clipped polygon background (8px corner cuts on TL + BR) ---
+        cut = 8
+        path = QPainterPath()
+        path.moveTo(r.x() + cut, r.y())
+        path.lineTo(r.right(), r.y())
+        path.lineTo(r.right(), r.bottom() - cut)
+        path.lineTo(r.right() - cut, r.bottom())
+        path.lineTo(r.x(), r.bottom())
+        path.lineTo(r.x(), r.y() + cut)
+        path.closeSubpath()
+
+        # Fill: transparent for idle, 10% tinted for rec/decoding
+        if state == "idle":
+            p.setBrush(Qt.NoBrush)
+            border_col = QColor(138, 149, 172, int(0.28 * 255))
+        else:
+            fill = QColor(col)
+            fill.setAlpha(int(0.10 * 255))
+            p.setBrush(QBrush(fill))
+            border_col = col
+
+        pen = QPen(border_col)
+        pen.setWidthF(1.0)
+        p.setPen(pen)
+        p.drawPath(path)
+
+        # --- Animated marker (left side) ---
+        cx_marker = r.x() + 8 + 4   # 8px left pad + 4px (half marker width=8)
+        cy_marker = r.y() + r.height() / 2.0
+
+        if state in ("recording", "rec"):
+            # Pulsing filled circle: sin pulse on radius 2.5..5
+            pulse = (math.sin(self._phase * 1.2) + 1.0) / 2.0  # 0..1
+            radius = 2.5 + pulse * 2.5
+            glow_col = QColor(col)
+            glow_col.setAlpha(int(0.55 * 255))
+            p.setBrush(QBrush(col))
+            p.setPen(Qt.NoPen)
+            p.drawEllipse(QPointF(cx_marker, cy_marker), radius, radius)
+        elif state in ("busy", "transcribing", "decoding"):
+            # Rotating arc — like a spinner, only the top arc portion
+            p.setBrush(Qt.NoBrush)
+            spin_angle = math.degrees(self._phase * 3.0) % 360.0  # fast spin
+            arc_rect = QRectF(cx_marker - 4, cy_marker - 4, 8, 8)
+            pen_arc = QPen(col)
+            pen_arc.setWidthF(1.5)
+            pen_arc.setCapStyle(Qt.RoundCap)
+            p.setPen(pen_arc)
+            # Draw 270° arc starting at the spin angle (leave 90° gap)
+            start16 = int((90.0 - spin_angle) * 16)
+            span16 = int(270 * 16)
+            p.drawArc(arc_rect, start16, span16)
+        else:
+            # Idle: small square rotated 45° (diamond)
+            p.save()
+            p.translate(cx_marker, cy_marker)
+            p.rotate(45.0)
+            side = 5.0
+            pen_d = QPen(col)
+            pen_d.setWidthF(1.0)
+            p.setPen(pen_d)
+            p.setBrush(Qt.NoBrush)
+            p.drawRect(QRectF(-side / 2, -side / 2, side, side))
+            p.restore()
+
+        # --- Label text ---
+        label = ("REC" if state in ("recording", "rec")
+                 else "DECODING" if state in ("busy", "transcribing", "decoding")
+                 else "READY")
+        if state == "idle":
+            text_col = QColor(138, 149, 172, int(0.75 * 255))  # TEXT_MID-ish
+        else:
+            text_col = col
+
+        f = QFont(FONT_RAJDHANI)
+        f.setPointSize(7)
+        f.setWeight(QFont.Bold)
+        f.setLetterSpacing(QFont.AbsoluteSpacing, 1.0)  # ~0.18em at 7pt ≈ 1px
+        p.setFont(f)
+        p.setPen(text_col)
+        # Position text after marker (marker occupies first ~16px) + 6px gap
+        text_x = r.x() + 8 + 8 + 6
+        from PySide6.QtGui import QFontMetrics
+        fm = QFontMetrics(f)
+        text_y = r.y() + (r.height() - fm.height()) // 2 + fm.ascent()
+        p.drawText(text_x, text_y, label)
+
+
+class _HeaderWidget(QWidget):
+    """Full header bar: brand mark + DICT wordmark + hotkey slab + status pill
+    + spacer + window controls + bottom gradient divider.
+
+    Padding: 12/16/10/16 (top/right/bottom/left). Gap: 12px.
+    """
+
+    def __init__(
+        self,
+        hotkey_label: str,
+        on_settings,
+        on_minimize,
+        on_close,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._state = "idle"
+        self._build(hotkey_label, on_settings, on_minimize, on_close)
+
+    def _build(self, hotkey_label, on_settings, on_minimize, on_close) -> None:
+        from dict.qt_design import TEXT_HI, TEXT_MID, CRIMSON, ACCENT, FONT_RAJDHANI
+
+        h = QHBoxLayout(self)
+        h.setContentsMargins(16, 12, 16, 10)
+        h.setSpacing(12)
+
+        # --- Brand mark group (icon + "DICT" text) ---
+        brand_group = QWidget()
+        brand_group.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        bg_layout = QHBoxLayout(brand_group)
+        bg_layout.setContentsMargins(0, 0, 0, 0)
+        bg_layout.setSpacing(8)
+
+        self._brand_mark = _BrandMark()
+        bg_layout.addWidget(self._brand_mark)
+
+        dict_label = QLabel("DICT")
+        f_dict = QFont(FONT_RAJDHANI)
+        f_dict.setPointSize(18)
+        f_dict.setWeight(QFont.Bold)
+        f_dict.setLetterSpacing(QFont.AbsoluteSpacing, 5.0)  # ~0.32em at 18pt ≈ 5–6px
+        dict_label.setFont(f_dict)
+        dict_label.setStyleSheet(f"color: {TEXT_HI.name()};")
+        bg_layout.addWidget(dict_label)
+
+        h.addWidget(brand_group)
+
+        # --- Hotkey slab ---
+        self._hotkey_slab = _HotkeySlab(hotkey_label)
+        h.addWidget(self._hotkey_slab)
+
+        # --- Status pill ---
+        self._status_pill = _StatusPill()
+        h.addWidget(self._status_pill)
+
+        # --- Stretch ---
+        h.addStretch(1)
+
+        # --- Window control buttons ---
+        btn_style_base = (
+            "QPushButton {"
+            "  background: transparent;"
+            "  border: none;"
+            f"  color: {TEXT_MID.name()};"
+            "  font-size: 13px;"
+            "}"
+        )
+        btn_style_normal_hover = (
+            btn_style_base +
+            "QPushButton:hover {"
+            "  background: rgba(138,149,172,31);"
+            f"  color: {TEXT_HI.name()};"
+            "}"
+        )
+        btn_style_close_hover = (
+            btn_style_base +
+            "QPushButton:hover {"
+            "  background: rgba(255,71,87,38);"
+            f"  color: {CRIMSON.name()};"
+            "}"
+        )
+
+        self.settings_btn = QPushButton()
+        self.settings_btn.setFixedSize(28, 24)
+        self.settings_btn.setCursor(Qt.PointingHandCursor)
+        self.settings_btn.setStyleSheet(btn_style_normal_hover)
+        self.settings_btn.setToolTip("Settings")
+        self.settings_btn.clicked.connect(on_settings)
+        self._paint_gear_icon(self.settings_btn)
+
+        self.minimize_btn = QPushButton("—")
+        self.minimize_btn.setFixedSize(28, 24)
+        self.minimize_btn.setCursor(Qt.PointingHandCursor)
+        self.minimize_btn.setStyleSheet(btn_style_normal_hover)
+        self.minimize_btn.setToolTip("Minimize")
+        self.minimize_btn.clicked.connect(on_minimize)
+
+        self.close_btn = QPushButton("✕")
+        self.close_btn.setFixedSize(28, 24)
+        self.close_btn.setCursor(Qt.PointingHandCursor)
+        self.close_btn.setStyleSheet(btn_style_close_hover)
+        self.close_btn.setToolTip("Close")
+        self.close_btn.clicked.connect(on_close)
+
+        h.addWidget(self.settings_btn)
+        h.addWidget(self.minimize_btn)
+        h.addWidget(self.close_btn)
+
+    def _paint_gear_icon(self, btn: QPushButton) -> None:
+        """Try to set gear PNG icon; fall back to unicode ⚙."""
+        try:
+            from dict import config as _cfg
+            gear_png = _cfg.ASSETS_DIR / "icon_gear@2x.png"
+            if gear_png.exists():
+                btn.setIcon(QIcon(str(gear_png)))
+                btn.setIconSize(QSize(14, 14))
+                return
+        except Exception:
+            pass
+        btn.setText("⚙")
+
+    # ---- public API ----
+
+    def set_state(self, state: str) -> None:
+        self._state = state
+        self._brand_mark.set_state(state)
+        self._status_pill.set_state(state)
+        self.update()  # repaint divider gradient if needed
+
+    def set_hotkey(self, label: str) -> None:
+        self._hotkey_slab.set_label(label)
+
+    def paintEvent(self, ev) -> None:
+        """Draw the bottom gradient divider over the header."""
+        super().paintEvent(ev)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, False)
+        y = self.height() - 1
+        # Horizontal gradient: transparent → LINE_MID(35%) at 10%→90% → transparent
+        grad = QLinearGradient(0, y, self.width(), y)
+        transparent = QColor(0, 0, 0, 0)
+        mid_col = QColor(138, 149, 172, int(0.35 * 255))
+        grad.setColorAt(0.0, transparent)
+        grad.setColorAt(0.10, mid_col)
+        grad.setColorAt(0.90, mid_col)
+        grad.setColorAt(1.0, transparent)
+        p.fillRect(0, y, self.width(), 1, QBrush(grad))
+
+
 # ---------- Main window ----------------------------------------------------
 
 class MainWindow(QWidget):
@@ -532,8 +936,8 @@ class MainWindow(QWidget):
         inner.setContentsMargins(0, 0, 0, 0)
         inner.setSpacing(0)
 
-        # Header (existing — restyled in Task 4)
-        inner.addLayout(self._build_header())
+        # Header (Task 4: redesigned with brand mark, hotkey slab, status pill)
+        inner.addWidget(self._build_header())
 
         # Capture zone: record widget on the left, status strip on the right
         cap = QWidget()
@@ -568,50 +972,25 @@ class MainWindow(QWidget):
         self._compact_history = CompactHistory(self._history, on_copy=self._on_copy)
         inner.addWidget(self._compact_history)
 
-    def _build_header(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setSpacing(10)
+    def _build_header(self) -> "_HeaderWidget":
+        """Build and return the header QWidget.
 
-        self._title = QLabel("◉ DICT")
-        self._title.setObjectName("title")
-
-        self._hotkey_badge = QLabel(f"[ {self._hotkey_label} ]")
-        self._hotkey_badge.setObjectName("hotkey")
-
-        row.addWidget(self._title)
-        row.addWidget(self._hotkey_badge)
-        row.addStretch()
-
-        self._settings_btn = QPushButton()
-        self._settings_btn.setObjectName("iconbtn")
-        self._settings_btn.setFixedSize(28, 28)
-        self._settings_btn.setCursor(Qt.PointingHandCursor)
-        # Use the generated gear PNG; fall back to unicode if missing.
-        from dict import config as _cfg
-        gear_png = _cfg.ASSETS_DIR / "icon_gear@2x.png"
-        if gear_png.exists():
-            self._settings_btn.setIcon(QIcon(str(gear_png)))
-            self._settings_btn.setIconSize(QSize(18, 18))
-        else:
-            self._settings_btn.setText("⚙")
-        self._settings_btn.clicked.connect(self._on_open_settings)
-
-        self._minimize_btn = QPushButton("—")
-        self._minimize_btn.setObjectName("iconbtn")
-        self._minimize_btn.setFixedSize(28, 28)
-        self._minimize_btn.setCursor(Qt.PointingHandCursor)
-        self._minimize_btn.clicked.connect(self.hide)
-
-        self._close_btn = QPushButton("✕")
-        self._close_btn.setObjectName("closebtn")
-        self._close_btn.setFixedSize(28, 28)
-        self._close_btn.setCursor(Qt.PointingHandCursor)
-        self._close_btn.clicked.connect(self._on_close)
-
-        row.addWidget(self._settings_btn)
-        row.addWidget(self._minimize_btn)
-        row.addWidget(self._close_btn)
-        return row
+        The widget exposes:
+          - set_state(state)      — updates brand dot + status pill
+          - set_hotkey(label)     — updates the hotkey slab text
+          - settings_btn / minimize_btn / close_btn — for signal wiring
+        """
+        self._header = _HeaderWidget(
+            hotkey_label=self._hotkey_label,
+            on_settings=self._on_open_settings,
+            on_minimize=self.hide,
+            on_close=self._on_close,
+        )
+        # Expose individual buttons for any external code that might reference them
+        self._settings_btn = self._header.settings_btn
+        self._minimize_btn = self._header.minimize_btn
+        self._close_btn = self._header.close_btn
+        return self._header
 
     def _apply_styles(self) -> None:
         self.setStyleSheet(f"""
@@ -619,37 +998,6 @@ class MainWindow(QWidget):
                 background-color: {SURFACE_1.name()};
                 border: 1px solid {LINE_DIM.name(QColor.HexArgb)};
                 border-radius: 0px;
-            }}
-            #title {{
-                color: {CYAN.name()};
-                font-family: '{MONO}';
-                font-size: 17px;
-                font-weight: bold;
-            }}
-            #hotkey {{
-                color: {CYAN_DIM.name()};
-                font-family: '{MONO}';
-                font-size: 11px;
-                font-weight: bold;
-                padding: 2px 8px;
-                border: 1px solid {CYAN_DIM.name()};
-                border-radius: 4px;
-            }}
-            #iconbtn, #closebtn {{
-                background: transparent;
-                color: {FG_DIM.name()};
-                border: 1px solid transparent;
-                border-radius: 4px;
-                font-size: 14px;
-                font-weight: bold;
-            }}
-            #iconbtn:hover {{
-                color: {CYAN.name()};
-                border-color: {CYAN_DIM.name()};
-            }}
-            #closebtn:hover {{
-                color: {RED.name()};
-                border-color: {RED.name()};
             }}
         """)
 
@@ -699,10 +1047,15 @@ class MainWindow(QWidget):
     # ---- slots (run on main thread) ----
 
     def _apply_state(self, state: str) -> None:
+        self._header.set_state(state)
         self._record_widget.set_state(state)
         self._status_strip.set_state(state)
         self._cta.set_state(state)
         self._transcript_panel.set_state(state)
+        # Update panel drop-shadow tint
+        col = state_color(state)
+        glow = QColor(col.red(), col.green(), col.blue(), 60)
+        self._panel_shadow.setColor(glow)
 
     def _apply_level(self, level: float) -> None:
         self._record_widget.set_level(level)
@@ -712,7 +1065,7 @@ class MainWindow(QWidget):
         self._compact_history.refresh()
 
     def _apply_hotkey_label(self, label: str) -> None:
-        self._hotkey_badge.setText(f"[ {label} ]")
+        self._header.set_hotkey(label)
         self._cta.set_hotkey(label)
 
     def _apply_show(self) -> None:
