@@ -31,10 +31,20 @@ class _SegmentBuilder:
 
     Commit triggers:
       - silence run >= pause_ms after any speech in the current segment
-      - speech run  >= hard_cap_s (forced split mid-utterance)
+      - speech run  >= hard_cap_s (forced split when speech-only time exceeds cap)
+      - elapsed run >= hard_cap_elapsed_s (forced split on wall-clock time
+        including inter-phrase pauses — keeps the UI feeling real-time even
+        when the user speaks continuously with tiny pauses that never trip the
+        silence-run commit)
     """
 
-    def __init__(self, pause_ms: int, hard_cap_s: float, sample_rate: int = 16000):
+    def __init__(
+        self,
+        pause_ms: int,
+        hard_cap_s: float,
+        sample_rate: int = 16000,
+        hard_cap_elapsed_s: float = 5.0,
+    ):
         self._sample_rate = sample_rate
         # Round UP so we definitely meet the threshold
         self._max_silence_windows = max(
@@ -44,9 +54,13 @@ class _SegmentBuilder:
         self._max_speech_windows = max(
             1, int(hard_cap_s * sample_rate / _VAD_WINDOW)
         )
+        self._max_elapsed_windows = max(
+            1, int(hard_cap_elapsed_s * sample_rate / _VAD_WINDOW)
+        )
         self._current: list[np.ndarray] = []   # int16 chunks accumulated
         self._silence_run = 0                  # consecutive silent windows
         self._speech_total = 0                 # total speech windows in current segment
+        self._total_windows = 0                # all windows (speech+silence) in current segment
 
     def feed(self, chunk: np.ndarray, is_speech_windows: list[bool]) -> list[np.ndarray]:
         """Append a chunk + its per-window speech flags. Return any commits.
@@ -58,6 +72,7 @@ class _SegmentBuilder:
         self._current.append(chunk)
 
         for is_speech in is_speech_windows:
+            self._total_windows += 1
             if is_speech:
                 self._silence_run = 0
                 self._speech_total += 1
@@ -65,6 +80,7 @@ class _SegmentBuilder:
                     seg = self._take_current()
                     if seg is not None:
                         committed.append(seg)
+                    continue
             else:
                 if self._speech_total > 0:
                     self._silence_run += 1
@@ -72,6 +88,14 @@ class _SegmentBuilder:
                         seg = self._take_current()
                         if seg is not None:
                             committed.append(seg)
+                        continue
+            # Elapsed-time cap: commit if we've been accumulating for too long
+            # and there's at least some speech worth transcribing.
+            if (self._speech_total > 0
+                    and self._total_windows >= self._max_elapsed_windows):
+                seg = self._take_current()
+                if seg is not None:
+                    committed.append(seg)
         return committed
 
     def flush(self) -> np.ndarray | None:
@@ -89,6 +113,7 @@ class _SegmentBuilder:
         self._current.clear()
         self._silence_run = 0
         self._speech_total = 0
+        self._total_windows = 0
         return seg
 
 
@@ -146,11 +171,13 @@ class VadStreamer:
         pause_ms: int = 500,
         hard_cap_s: float = 12.0,
         sample_rate: int = 16000,
+        hard_cap_elapsed_s: float = 5.0,
     ):
         self._transcriber = transcriber
         self._on_partial = on_partial
         self._pause_ms = pause_ms
         self._hard_cap_s = hard_cap_s
+        self._hard_cap_elapsed_s = hard_cap_elapsed_s
         self._sample_rate = sample_rate
         self._audio_q: queue.Queue = queue.Queue(maxsize=self.AUDIO_QUEUE_CAP)
         self._segments_q: queue.Queue = queue.Queue()
@@ -199,6 +226,7 @@ class VadStreamer:
             pause_ms=self._pause_ms,
             hard_cap_s=self._hard_cap_s,
             sample_rate=self._sample_rate,
+            hard_cap_elapsed_s=self._hard_cap_elapsed_s,
         )
         self._running.set()
         self._vad_thread = threading.Thread(

@@ -42,8 +42,9 @@ AUTO_SHOW_SECONDS = 2.0
 
 # Streaming / paste
 AUTO_PASTE = True            # send Ctrl+V into the focused field after transcription
-STREAM_PAUSE_MS = 500        # silence duration that commits a segment
-STREAM_HARD_CAP_S = 12.0     # max segment duration before forced commit
+STREAM_PAUSE_MS = 300        # silence duration that commits a segment
+STREAM_HARD_CAP_S = 4.0      # max speech-only seconds in a segment before forced commit
+STREAM_HARD_CAP_ELAPSED_S = 5.0  # wall-clock cap including inter-phrase pauses
 
 # Icon filenames (inside ASSETS_DIR)
 ICON_FILES = {

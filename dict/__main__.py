@@ -155,11 +155,39 @@ def _selftest() -> int:
         return 2
 
 
+def _install_excepthooks() -> None:
+    """Route uncaught exceptions (main + worker threads) into dict-debug.log.
+
+    Without this, a hard crash in pythonw leaves no trace because there's
+    no console to flush stderr to. The default excepthooks still run after
+    we log so Windows error reporting / debugger attach still works.
+    """
+    import traceback
+    crash_log = get_logger("dict.crash")
+
+    def _excepthook(exc_type, exc_value, exc_tb):
+        tb = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        crash_log.error("UNCAUGHT EXCEPTION:\n%s", tb)
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+    def _thread_excepthook(args):
+        tb = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
+        crash_log.error(
+            "UNCAUGHT THREAD EXCEPTION in %s:\n%s",
+            getattr(args.thread, "name", "?"), tb,
+        )
+        threading.__excepthook__(args)
+
+    sys.excepthook = _excepthook
+    threading.excepthook = _thread_excepthook
+
+
 def main() -> int:
     if "--selftest" in sys.argv:
         return _selftest()
 
     _configure_logging()
+    _install_excepthooks()
     log = get_logger("dict.main")
     log.info("=== DICT starting (commit %s, python %s) ===",
              _git_commit(), ".".join(str(x) for x in sys.version_info[:3]))
@@ -217,6 +245,7 @@ def main() -> int:
             on_partial=_on_partial,
             pause_ms=config.STREAM_PAUSE_MS,
             hard_cap_s=config.STREAM_HARD_CAP_S,
+            hard_cap_elapsed_s=config.STREAM_HARD_CAP_ELAPSED_S,
             sample_rate=config.SAMPLE_RATE,
         )
 

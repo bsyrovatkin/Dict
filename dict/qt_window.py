@@ -35,7 +35,7 @@ from PySide6.QtGui import (
     QPainterPath, QPen, QPixmap, QRadialGradient,
 )
 from PySide6.QtWidgets import (
-    QApplication, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QListWidget,
+    QApplication, QHBoxLayout, QLabel, QListWidget,
     QListWidgetItem, QPushButton, QVBoxLayout, QWidget,
 )
 
@@ -876,14 +876,26 @@ class _PanelWidget(QWidget):
         self.update()
 
     def paintEvent(self, ev) -> None:
-        # Explicit fill: stylesheet-driven background gets suppressed by
-        # QGraphicsDropShadowEffect, so paint SURFACE_1 ourselves first.
+        # Explicit fill: stylesheet-driven background can be flaky under load,
+        # so paint SURFACE_1 ourselves first.
         from PySide6.QtGui import QPainter
         from dict.qt_design import paint_corner_brackets, state_color, SURFACE_1
         p_fill = QPainter(self)
         p_fill.fillRect(self.rect(), SURFACE_1)
         p_fill.end()
         super().paintEvent(ev)
+
+        # State-tinted inner border (replaces the brittle QGraphicsDropShadowEffect)
+        glow = QColor(state_color(self._state))
+        glow.setAlpha(80)
+        pen = QPen(glow); pen.setWidthF(1.5)
+        p_brd = QPainter(self)
+        p_brd.setRenderHint(QPainter.Antialiasing, True)
+        p_brd.setPen(pen); p_brd.setBrush(Qt.NoBrush)
+        # Inset 1px so the border sits inside the widget rect cleanly
+        p_brd.drawRect(QRectF(self.rect().adjusted(1, 1, -2, -2)))
+        p_brd.end()
+
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
         col = state_color(self._state)
@@ -963,16 +975,13 @@ class MainWindow(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
-        # Panel container with state-tinted drop shadow + corner brackets
+        # Panel container with hand-painted state-tinted border + corner brackets.
+        # NB: a QGraphicsDropShadowEffect was tried here but caused hard crashes
+        # under heavy CPU load (Whisper decoding) on Windows — the effect ran on
+        # the GUI thread and tripped over Qt's render pipeline. The border is
+        # now painted directly in _PanelWidget.paintEvent.
         self._panel = _PanelWidget(self)
         self._panel.setObjectName("panel")
-        shadow = QGraphicsDropShadowEffect(self._panel)
-        shadow.setBlurRadius(24)
-        idle_col = state_color("idle")
-        shadow.setColor(QColor(idle_col.red(), idle_col.green(), idle_col.blue(), 45))
-        shadow.setOffset(0, 0)
-        self._panel.setGraphicsEffect(shadow)
-        self._panel_shadow = shadow
         outer.addWidget(self._panel)
 
         inner = QVBoxLayout(self._panel)
@@ -1095,10 +1104,7 @@ class MainWindow(QWidget):
         self._status_strip.set_state(state)
         self._cta.set_state(state)
         self._transcript_panel.set_state(state)
-        # Update panel drop-shadow tint + corner brackets
-        col = state_color(state)
-        glow = QColor(col.red(), col.green(), col.blue(), 45)
-        self._panel_shadow.setColor(glow)
+        # Update panel border tint + corner brackets (hand-painted; no drop shadow)
         if isinstance(self._panel, _PanelWidget):
             self._panel.set_state(state)
 
