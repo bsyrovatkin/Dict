@@ -15,8 +15,8 @@ Today the transcription flow is fully batch: hotkey → record-everything → on
 ## Goals
 
 - Streaming recognition that commits text in segments at natural pauses, accumulating in a HUD that stays visible during recording.
-- After F9-stop, paste the full text directly into whatever text field has focus.
-- No regressions in the existing F9 → speak → F9 → text-in-clipboard flow if streaming fails.
+- After the user-configured hotkey ends recording, paste the full text directly into whatever text field has focus.
+- No regressions in the existing hotkey → speak → hotkey → text-in-clipboard flow if streaming fails.
 - Make the model-load hang impossible (or at least loud and obvious).
 
 ## Non-goals
@@ -116,8 +116,17 @@ def paste_text(text: str, restore_delay_s: float = 0.2) -> bool:
 Flow:
 1. `saved = pyperclip.paste()` (string; if clipboard has non-text content, returns "")
 2. `pyperclip.copy(text)`
-3. Try `keyboard.send('ctrl+v')`. On failure: log warning, return False, do NOT restore (text stays in clipboard).
-4. Schedule a `threading.Timer(restore_delay_s, restore)` where `restore` does `pyperclip.copy(saved)`. Timer is daemon. Errors in restore are swallowed and logged.
+3. Best-effort `keyboard.release(<configured_hotkey>)` — releases any keys from the user's hotkey that may still be physically/logically down (e.g., if hotkey is `ctrl+shift+v`, releases `ctrl`/`shift`/`v`). Errors swallowed. Prevents the modifier-still-pressed race when sending Ctrl+V immediately after the hotkey fires. The hotkey string is passed into `paste_text` by Controller (Controller knows the current binding).
+4. Try `keyboard.send('ctrl+v')`. On failure: log warning, return False, do NOT restore (text stays in clipboard).
+5. Schedule a `threading.Timer(restore_delay_s, restore)` where `restore` does `pyperclip.copy(saved)`. Timer is daemon. Errors in restore are swallowed and logged.
+
+Signature becomes:
+
+```python
+def paste_text(text: str, current_hotkey: str | None = None, restore_delay_s: float = 0.2) -> bool: ...
+```
+
+Controller, which already tracks the live hotkey (it's stored in `__main__.py` and re-registered on settings change), passes it through.
 
 **Why a timer and not synchronous wait:** the active app processes Ctrl+V asynchronously. Restoring immediately can race with the paste read and result in no text appearing. 200ms is enough for all common Windows apps tested in the wild for similar tools (Power Toys Quick Accent, Whisper Writer, etc.).
 
@@ -147,7 +156,7 @@ Flow:
 
 ### `Controller` (`dict/controller.py`)
 
-**New init params:** `streamer: VadStreamer`, `paste: Callable[[str], bool]`, `auto_paste: bool`.
+**New init params:** `streamer: VadStreamer`, `paste: Callable[[str, str | None], bool]`, `auto_paste: bool`, `get_current_hotkey: Callable[[], str]` (so Controller always asks for the live hotkey rather than caching a stale one across settings changes).
 
 **On hotkey (state=IDLE):**
 1. If `not transcriber.is_loaded`: set status="loading", `tray.notify("Dict", "Model still loading")`, return without recording.
@@ -162,7 +171,7 @@ Flow:
 3. If `text == ""`: fallback to `transcriber.transcribe(audio)`
 4. If still empty: return to idle, hide partials
 5. Else:
-   - If `auto_paste`: call `paste_text(text)`. This call sends Ctrl+V synchronously but the clipboard-restore runs on a daemon `threading.Timer` and Controller does not wait for it. Controller continues to history/log immediately after Ctrl+V returns.
+   - If `auto_paste`: call `paste(text, get_current_hotkey())`. This call sends Ctrl+V synchronously but the clipboard-restore runs on a daemon `threading.Timer` and Controller does not wait for it. Controller continues to history/log immediately after Ctrl+V returns.
    - Else: `clipboard_set(text)` (legacy path)
    - `history.push(text)`, `logger_append(text)`, `window.refresh()`
 6. `window.clear_partials()`
@@ -211,7 +220,7 @@ def is_loaded(self) -> bool:
 ## Data flow (single dictation session)
 
 ```
-F9 ↓
+hotkey ↓                                          (configurable: F9/pause/ctrl+shift+v/...)
 └─ Controller.on_hotkey() [state=IDLE]
    ├─ guard: transcriber.is_loaded? else status=loading, notify, return
    ├─ recorder.set_push_callback(streamer.push)
@@ -247,7 +256,7 @@ streamer._tx_loop:
        _committed_text.append(text)
        on_partial(text)        → window.append_partial(text)
 
-F9 ↓
+hotkey ↓
 └─ Controller.on_hotkey() [state=RECORDING]
    ├─ recorder.set_push_callback(None)
    ├─ audio = recorder.stop()                     (full int16 buffer)
@@ -277,6 +286,7 @@ F9 ↓
 | Restore timer's `pyperclip.copy(saved)` fails | Log warning, swallow. Worst case: clipboard contains recognized text instead of pre-recording content. |
 | Hotkey fired during model load | Notify + status="loading", no recording starts. |
 | Hotkey fired during transcribing (legacy state) | Ignored, as today. With streaming, the TRANSCRIBING state is much shorter (only the final flush). |
+| User's hotkey shares keys with paste (`ctrl+v`, `ctrl+shift+v`, etc.) and auto_paste is on | `paste_text` calls `keyboard.release(<hotkey>)` first (best-effort, swallowed if it errors), then sends `ctrl+v`. The release prevents the modifier-stuck-down race. If the user actually bound their hotkey to literally `ctrl+v`, auto-paste will still work but the hotkey may also fire again — at startup, log a warning if the configured hotkey contains `v` so the user knows to rebind. |
 
 ---
 
