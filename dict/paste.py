@@ -14,8 +14,8 @@ from __future__ import annotations
 import threading
 
 import keyboard
-import pyperclip
 
+from dict import clipboard
 from dict.utils_logging import get_logger
 
 log = get_logger(__name__)
@@ -34,17 +34,9 @@ def paste_text(
     keyboard.send failed (text remains in the clipboard so the user can
     paste manually; the restore timer is NOT scheduled in that case).
     """
-    saved = ""
-    try:
-        saved = pyperclip.paste() or ""
-    except Exception:
-        log.exception("paste_text: read of clipboard failed; will not restore")
-        saved = ""
+    saved = clipboard.get_text()
 
-    try:
-        pyperclip.copy(text)
-    except Exception:
-        log.exception("paste_text: copy of new text failed")
+    if not clipboard.set_text(text):
         return False
 
     if current_hotkey:
@@ -61,10 +53,9 @@ def paste_text(
         return False
 
     def _restore() -> None:
-        try:
-            pyperclip.copy(saved)
-        except Exception:
-            log.warning("paste_text: clipboard restore failed (swallowed)")
+        clipboard.set_text(saved)  # set_text already swallows internally, no try needed
 
-    threading.Timer(restore_delay_s, _restore).start()
+    timer = threading.Timer(restore_delay_s, _restore)
+    timer.daemon = True
+    timer.start()
     return True
