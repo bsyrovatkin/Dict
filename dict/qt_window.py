@@ -270,8 +270,13 @@ class MainWindow(QWidget):
         self._drag_pos: QPoint | None = None
 
         self.setObjectName("mainWindow")
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        self.setWindowFlags(
+            Qt.FramelessWindowHint
+            | Qt.Tool
+            | Qt.WindowStaysOnTopHint
+        )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setMinimumSize(560, 680)
         self.resize(560, 680)
 
@@ -533,9 +538,11 @@ class MainWindow(QWidget):
         self._hotkey_badge.setText(f"[ {label} ]")
 
     def _apply_show(self) -> None:
+        # HUD style: show on top but never steal focus from the user's
+        # current text field (so auto-paste sends Ctrl+V into the right
+        # window). The Qt.WindowStaysOnTopHint flag is what brings us
+        # to the top; raise_/activateWindow would also steal focus.
         self.show()
-        self.raise_()
-        self.activateWindow()
 
     def _apply_toggle(self) -> None:
         if self.isVisible():
