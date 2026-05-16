@@ -302,6 +302,9 @@ class TranscriptPanel(QWidget):
         self._empty_label.setFont(ef)
         self._empty_label.setAlignment(Qt.AlignCenter)
         self._empty_label.setStyleSheet(f"color: {TEXT_DIM.name()}; background: transparent;")
+        self._empty_label.setVisible(True)
+        # Position immediately so it's centred even before the first resizeEvent
+        self._empty_label.setGeometry(self._body.rect())
 
         # Footer with cadence + label
         footer = QWidget()

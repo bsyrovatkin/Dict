@@ -2,17 +2,79 @@
 to toggle. 3-4 rows visible inside scroll. Mirrors history.jsx::CompactHistory."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QSizePolicy,
+    QVBoxLayout, QWidget,
 )
 
 from dict.history import History
 from dict.qt_design import (
-    LINE_DIM, SURFACE_0, TEXT_DIM, TEXT_HI, TEXT_MID,
+    LINE_DIM, LINE_MID, SURFACE_0, TEXT_DIM, TEXT_HI, TEXT_MID,
     FONT_MONO, FONT_RAJDHANI,
 )
+
+
+def _detect_lang(text: str) -> str:
+    """Return 'RU' if text contains Cyrillic characters, otherwise 'EN'."""
+    for ch in text:
+        cl = ch.lower()
+        if ('а' <= cl <= 'я') or cl == 'ё':
+            return "RU"
+    return "EN"
+
+
+def _make_row_widget(index: int, timestamp: str, lang: str, short_text: str) -> QWidget:
+    """Build a single history-row widget with columns: ## | HH:MM:SS | LANG chip | text."""
+    row = QWidget()
+    row.setAttribute(Qt.WA_TranslucentBackground, True)
+    hl = QHBoxLayout(row)
+    hl.setContentsMargins(14, 4, 14, 4)
+    hl.setSpacing(10)
+
+    # Index label e.g. "01"
+    idx_lbl = QLabel(f"{index:02d}")
+    f_idx = QFont(FONT_MONO); f_idx.setPointSize(8)
+    f_idx.setStyleHint(QFont.Monospace)
+    idx_lbl.setFont(f_idx)
+    idx_lbl.setStyleSheet(f"color: {TEXT_DIM.name()}; background: transparent;")
+    idx_lbl.setFixedWidth(20)
+
+    # Timestamp
+    ts_lbl = QLabel(timestamp)
+    f_ts = QFont(FONT_MONO); f_ts.setPointSize(9)
+    f_ts.setStyleHint(QFont.Monospace)
+    ts_lbl.setFont(f_ts)
+    ts_lbl.setStyleSheet(f"color: {TEXT_MID.name()}; background: transparent;")
+    ts_lbl.setFixedWidth(60)
+
+    # Language chip
+    lang_lbl = QLabel(lang)
+    f_lang = QFont(FONT_RAJDHANI); f_lang.setPointSize(7); f_lang.setWeight(QFont.DemiBold)
+    lang_lbl.setFont(f_lang)
+    border_color = LINE_MID.name(QColor.HexArgb)
+    lang_lbl.setStyleSheet(
+        f"color: {TEXT_MID.name()}; background: transparent;"
+        f" border: 1px solid {border_color}; padding: 1px 3px;"
+    )
+    lang_lbl.setFixedWidth(24)
+    lang_lbl.setAlignment(Qt.AlignCenter)
+
+    # Text label (ellipsized)
+    text_lbl = QLabel(short_text)
+    f_text = QFont(FONT_MONO); f_text.setPointSize(10)
+    f_text.setStyleHint(QFont.Monospace)
+    text_lbl.setFont(f_text)
+    text_lbl.setStyleSheet(f"color: {TEXT_MID.name()}; background: transparent;")
+    text_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+    hl.addWidget(idx_lbl)
+    hl.addWidget(ts_lbl)
+    hl.addWidget(lang_lbl)
+    hl.addWidget(text_lbl, 1)
+
+    return row
 
 
 class CompactHistory(QWidget):
@@ -96,6 +158,8 @@ class CompactHistory(QWidget):
 
         # List
         self._list = QListWidget()
+        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._list.setTextElideMode(Qt.ElideRight)
         self._list.itemClicked.connect(self._on_clicked)
         v.addWidget(self._list, 1)
 
@@ -112,8 +176,12 @@ class CompactHistory(QWidget):
         for i, entry in enumerate(self._history.items()):
             ts = entry.timestamp.strftime("%H:%M:%S")
             short = entry.text[:60] + ("…" if len(entry.text) > 60 else "")
-            item = QListWidgetItem(f"  {i+1:02d}    {ts}    {short}")
+            lang = _detect_lang(entry.text)
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(0, 28))
             self._list.addItem(item)
+            row_widget = _make_row_widget(i + 1, ts, lang, short)
+            self._list.setItemWidget(item, row_widget)
         # Keep count label in sync
         if hasattr(self, "_count_label"):
             self._count_label.setText(f"· {len(self._history.items())} ENTRIES")

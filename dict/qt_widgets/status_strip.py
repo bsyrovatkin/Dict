@@ -108,7 +108,7 @@ class StatusStrip(QWidget):
         ]:
             row = QHBoxLayout()
             row.setSpacing(10)
-            lbl.setFixedWidth(56)
+            lbl.setFixedWidth(64)
             row.addWidget(lbl, 0)
             row.addWidget(val, 1, Qt.AlignLeft | Qt.AlignVCenter)
             v.addLayout(row)

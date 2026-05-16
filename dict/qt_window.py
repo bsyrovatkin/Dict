@@ -885,9 +885,54 @@ class _StatusPill(QWidget):
         p.drawText(text_x, text_y, label)
 
 
+class _WaveStrip(QWidget):
+    """Mini 120×22 animated waveform strip in the header.
+    36 bars; the last 6 are state-colored, the rest are dim grey."""
+    BARS = 36
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(120, 22)
+        self._state = "idle"
+        self._phase = 0.0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(70)
+
+    def set_state(self, state: str) -> None:
+        self._state = state
+
+    def _tick(self) -> None:
+        self._phase += 0.18
+        self.update()
+
+    def paintEvent(self, _ev) -> None:
+        from dict.qt_design import state_color
+        p = QPainter(self)
+        col = state_color(self._state)
+        dim = QColor(138, 149, 172, 50)
+        w = self.width()
+        h = self.height()
+        bar_w = max(1, int(w / self.BARS) - 1)
+        for i in range(self.BARS):
+            env = 0.3 + abs(math.sin(self._phase + i * 0.4)) * 0.7
+            state = self._state
+            if state in ("recording", "rec"):
+                env *= 1.0
+            elif state in ("busy", "transcribing", "decoding"):
+                env *= 0.5 + 0.4 * abs(math.sin(self._phase + i * 0.2))
+            else:
+                env *= 0.25
+            bh = max(1, int(env * (h - 4)))
+            x = i * (bar_w + 1)
+            y = (h - bh) // 2
+            c = col if i >= self.BARS - 6 else dim
+            p.fillRect(x, y, bar_w, bh, c)
+
+
 class _HeaderWidget(QWidget):
     """Full header bar: brand mark + DICT wordmark + hotkey slab + status pill
-    + spacer + window controls + bottom gradient divider.
+    + waveform strip + spacer + window controls + bottom gradient divider.
 
     Padding: 12/16/10/16 (top/right/bottom/left). Gap: 12px.
     """
@@ -941,8 +986,12 @@ class _HeaderWidget(QWidget):
         self._status_pill = _StatusPill()
         h.addWidget(self._status_pill)
 
+        # --- Mini waveform strip ---
+        self._wave = _WaveStrip()
+        h.addWidget(self._wave, 1, Qt.AlignVCenter)
+
         # --- Stretch ---
-        h.addStretch(1)
+        h.addStretch(0)
 
         # --- Window control buttons ---
         btn_style_base = (
@@ -1013,6 +1062,7 @@ class _HeaderWidget(QWidget):
         self._state = state
         self._brand_mark.set_state(state)
         self._status_pill.set_state(state)
+        self._wave.set_state(state)
         self.update()  # repaint divider gradient if needed
 
     def set_hotkey(self, label: str) -> None:
