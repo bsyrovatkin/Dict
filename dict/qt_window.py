@@ -923,7 +923,6 @@ class MainWindow(QWidget):
             | Qt.Tool
             | Qt.WindowStaysOnTopHint
         )
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setMinimumSize(560, 680)
         self.resize(560, 680)
