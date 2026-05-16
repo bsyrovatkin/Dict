@@ -171,6 +171,8 @@ def main() -> int:
 
     # High-DPI scaling is enabled automatically in Qt 6 — no explicit attribute needed.
     app = QApplication(sys.argv)
+    from dict.qt_design import load_application_fonts
+    load_application_fonts(config.ASSETS_DIR / "fonts")
     app.setQuitOnLastWindowClosed(False)
     app.setWindowIcon(QIcon(str(config.ASSETS_DIR / "dict.ico")))
 

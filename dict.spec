@@ -30,6 +30,7 @@ a = Analysis(  # noqa: F821
         ("assets/*.ico", "assets"),
         ("assets/*.wav", "assets"),
         ("assets/*.png", "assets"),
+        ("assets/fonts/*.ttf", "assets/fonts"),
         *_fw_data,
         *_ort_data,
     ],
