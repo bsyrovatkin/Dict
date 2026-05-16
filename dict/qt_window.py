@@ -28,7 +28,7 @@ import math
 from typing import Callable
 
 from PySide6.QtCore import (
-    QEasingCurve, QPoint, QPropertyAnimation, QRectF, QSize, Qt, QTimer, Signal,
+    QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRectF, QSize, Qt, QTimer, Signal,
 )
 from PySide6.QtGui import (
     QBrush, QColor, QFont, QFontDatabase, QIcon, QLinearGradient, QPainter,
@@ -82,30 +82,61 @@ STATE_TEXT = {
 }
 
 
-# ---------- Record widget (QPainter circle + VU ring + spinner) ------------
+# ---------- Record widget (QPainter HUD: concentric rings, VU, radar) ------
 
 class RecordWidget(QWidget):
+    """Layered HUD widget mirroring docs/superpowers/design-source/src/record-widget.jsx.
+
+    Internal coordinate space is 360x360; the painter scales uniformly so the
+    widget can be displayed at any size (typically 200x200). Layer order in
+    paintEvent matches the JSX `tick()` exactly:
+      1. Outer cardinal ticks
+      2. Corner brackets
+      3. 3 dotted concentric rings
+      4. Degree ticks every 15 degrees
+      5. Radar sweep (idle only)
+      6. Decoding spinner arc (decoding only)
+      7. VU ring (54 segments)
+      8. Peak chevron (rec only)
+      9. Inner core ring
+     10. Pulse ring (rec only)
+     11. Core glyph (play / square / dots)
+     12. Center crosshair
+    """
+
     clicked = Signal()
 
     VU_SEGMENTS = 54
-    CORE_RADIUS = 54
-    RING_INNER = 86
-    RING_OUTER = 140
-    SPIN_ARC = 60  # degrees
+    CORE_RADIUS = 58
+    RING_INNER = 84
+    RING_OUTER = 110
+    R_OUT = 170
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumSize(320, 320)
+        self.setMinimumSize(200, 200)
         self.setCursor(Qt.PointingHandCursor)
         self._state = "loading"
         self._level = 0.0
         self._level_target = 0.0
-        self._spin_angle = 0.0
-        self._pulse_phase = 0.0
+
+        # Animation phases
+        self._sweep_phase = 0.0   # idle radar
+        self._spin_phase = 0.0    # decoding spinner
+        self._pulse_phase = 0.0   # core pulse (rec)
+        self._t_ms = 0.0          # monotonic-ish time accumulator for VU/peak
+
+        # VU envelope + peak tracker (mirrors vuRef / peakRef in JSX)
+        import random as _random
+        self._random = _random.Random()
+        self._vu: list[float] = [0.0] * self.VU_SEGMENTS
+        self._peak = {"idx": 0, "val": 0.0, "t": 0.0}
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(33)  # ~30 fps
+
+    # ---- public API (unchanged) ----
 
     def set_state(self, state: str) -> None:
         self._state = state
@@ -118,126 +149,305 @@ class RecordWidget(QWidget):
             self.clicked.emit()
         super().mousePressEvent(event)
 
+    # ---- state palette ----
+
+    @staticmethod
+    def _state_palette(state: str) -> dict:
+        """Return {'hi','mid','ink','dim'} QColors for the given state.
+
+        Mirrors the JSX `col` object — picks crimson for rec, amber for
+        decoding/busy/transcribing, accent (cyan) for everything else.
+        """
+        from dict.qt_design import (
+            ACCENT, ACCENT_DEEP, ACCENT_INK, ACCENT_DIM,
+            AMBER, AMBER_DEEP, AMBER_INK, AMBER_DIM,
+            CRIMSON, CRIMSON_DEEP, CRIMSON_INK, CRIMSON_DIM,
+        )
+        if state in ("recording", "rec"):
+            return {"hi": CRIMSON, "mid": CRIMSON_DEEP, "ink": CRIMSON_INK, "dim": CRIMSON_DIM}
+        if state in ("busy", "transcribing", "decoding"):
+            return {"hi": AMBER, "mid": AMBER_DEEP, "ink": AMBER_INK, "dim": AMBER_DIM}
+        # idle / loading / error -> accent
+        return {"hi": ACCENT, "mid": ACCENT_DEEP, "ink": ACCENT_INK, "dim": ACCENT_DIM}
+
+    # ---- animation tick ----
+
     def _tick(self) -> None:
-        # Smooth level
+        # Smooth incoming level
         self._level += (self._level_target - self._level) * 0.35
-        if self._state != "recording":
-            self._level *= 0.90
-        # Animation counters
-        self._spin_angle = (self._spin_angle + 6) % 360
-        self._pulse_phase = (self._pulse_phase + 0.12) % (2 * math.pi)
+
+        # Advance phases
+        self._sweep_phase += 0.06
+        self._spin_phase += 0.07
+        self._pulse_phase += 0.105
+        self._t_ms += 33.0
+        t = self._t_ms / 1000.0  # seconds
+
+        # Update VU envelope per state — mirrors JSX `tick()` lines 47-61
+        state = self._state
+        if state in ("recording", "rec"):
+            # When we have a live mic level use it as a multiplier so the bars
+            # actually reflect speech volume; otherwise leave the random
+            # envelope at full intensity.
+            mult = max(0.2, self._level if self._level > 0 else 1.0)
+            for i in range(self.VU_SEGMENTS):
+                target = (0.25 + self._random.random() * 0.75
+                          * (0.5 + 0.5 * math.sin(t * 6 + i * 0.4))) * mult
+                self._vu[i] += (target - self._vu[i]) * 0.35
+        elif state in ("busy", "transcribing", "decoding"):
+            for i in range(self.VU_SEGMENTS):
+                self._vu[i] += (0.08 - self._vu[i]) * 0.2
+        else:
+            for i in range(self.VU_SEGMENTS):
+                self._vu[i] += (0.0 - self._vu[i]) * 0.15
+
+        # Peak tracker with slow decay
+        max_i = 0
+        max_v = 0.0
+        for i, v in enumerate(self._vu):
+            if v > max_v:
+                max_v = v
+                max_i = i
+        dt = (self._t_ms - self._peak["t"])
+        if max_v > self._peak["val"] - dt * 0.0008:
+            self._peak = {"idx": max_i, "val": max_v, "t": self._t_ms}
+
         self.update()
 
+    # ---- paint ----
+
     def paintEvent(self, event) -> None:  # noqa: N802
+        from PySide6.QtGui import QConicalGradient
+        from dict.qt_design import LINE_DIM, LINE_MID
+
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
-        w = self.width()
-        h = self.height()
-        cx = w / 2
-        cy = h / 2
 
-        self._paint_grid(p, cx, cy)
-        self._paint_vu_ring(p, cx, cy)
-        self._paint_spinner(p, cx, cy)
-        self._paint_pulse(p, cx, cy)
-        self._paint_core(p, cx, cy)
+        # Scale 360x360 internal space into the actual widget rect, centered.
+        s = min(self.width(), self.height()) / 360.0
+        p.translate(self.width() / 2, self.height() / 2)
+        p.scale(s, s)
+        p.translate(-180, -180)
 
-    # ---- paint helpers ----
+        cx = 180.0
+        cy = 180.0
+        col = self._state_palette(self._state)
+        state = self._state
 
-    def _paint_grid(self, p: QPainter, cx: float, cy: float) -> None:
-        pen = QPen(GRID_DIM, 1)
+        # 1) Outer cardinal ticks (N/E/S/W from r=160 to r=174)
+        pen = QPen(LINE_MID)
+        pen.setWidthF(1.0)
+        pen.setCosmetic(False)
         p.setPen(pen)
-        for r in (self.RING_OUTER + 16, self.RING_OUTER + 38, self.RING_OUTER + 60):
-            p.drawEllipse(QPoint(int(cx), int(cy)), r, r)
-        # cardinal tick marks
-        pen2 = QPen(CYAN_DIM, 1)
-        p.setPen(pen2)
-        for deg in (0, 90, 180, 270):
-            a = math.radians(deg)
-            r1 = self.RING_OUTER + 16
-            r2 = self.RING_OUTER + 62
-            p.drawLine(int(cx + r1 * math.cos(a)), int(cy + r1 * math.sin(a)),
-                       int(cx + r2 * math.cos(a)), int(cy + r2 * math.sin(a)))
+        for ang_deg in (0, 90, 180, 270):
+            a = math.radians(ang_deg - 90)
+            r1 = self.R_OUT - 10
+            r2 = self.R_OUT + 4
+            p.drawLine(QPointF(cx + math.cos(a) * r1, cy + math.sin(a) * r1),
+                       QPointF(cx + math.cos(a) * r2, cy + math.sin(a) * r2))
 
-    def _paint_vu_ring(self, p: QPainter, cx: float, cy: float) -> None:
-        level = max(0.0, min(1.0, self._level))
-        lit_count = int(level * self.VU_SEGMENTS)
-        colour = STATE_COLOR.get(self._state, CYAN)
-        dim_colour = QColor(colour)
-        dim_colour.setAlpha(70)
+        # 2) Corner brackets at BR=178, inset 68% from center
+        pen = QPen(col["ink"])
+        pen.setWidthF(1.0)
+        p.setPen(pen)
+        BR = self.R_OUT + 8
+        bracket_len = 14
+        for qx, qy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+            ox = cx + qx * BR * 0.68
+            oy = cy + qy * BR * 0.68
+            p.drawLine(QPointF(ox + qx * bracket_len, oy), QPointF(ox, oy))
+            p.drawLine(QPointF(ox, oy), QPointF(ox, oy + qy * bracket_len))
 
-        for i in range(self.VU_SEGMENTS):
-            a = 2 * math.pi * i / self.VU_SEGMENTS - math.pi / 2
-            # Per-segment modulation to make it feel alive even when quiet
-            seg_level = level * (0.55 + 0.45 * math.sin(i * 0.5 + self._spin_angle * 0.1))
-            seg_level = max(0.0, seg_level)
-            r1 = self.RING_INNER
-            r2 = self.RING_INNER + 6 + (self.RING_OUTER - self.RING_INNER) * seg_level
-            pen = QPen(colour if i < lit_count else dim_colour, 3)
-            pen.setCapStyle(Qt.RoundCap)
+        # 3) 3 concentric dotted rings
+        pen = QPen(LINE_DIM)
+        pen.setWidthF(1.0)
+        pen.setDashPattern([1.0, 3.0])
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        for r in (165, 140, 120):
+            p.drawEllipse(QPointF(cx, cy), r, r)
+
+        # 4) Degree ticks every 15 degrees on inner ring (r=120)
+        pen = QPen(QColor(138, 149, 172, int(0.35 * 255)))
+        pen.setWidthF(1.0)
+        pen.setDashPattern([])  # solid
+        p.setPen(pen)
+        for deg in range(0, 360, 15):
+            a = math.radians(deg - 90)
+            major = (deg % 45) == 0
+            r1 = 120 - (6 if major else 3)
+            r2 = 120
+            p.drawLine(QPointF(cx + math.cos(a) * r1, cy + math.sin(a) * r1),
+                       QPointF(cx + math.cos(a) * r2, cy + math.sin(a) * r2))
+
+        # 5) Radar sweep (idle only) — conic gradient, annulus 72..118
+        if state == "idle":
+            sweep_a = (self._sweep_phase * 0.6) % (2 * math.pi)
+            # Qt's QConicalGradient: angle in degrees, 0 = 3 o'clock, ccw.
+            # JSX uses 0 = 3 o'clock CW with sweep starting at (sweepA - PI/2).
+            # Convert: rotate so the bright edge sits at sweep_a relative to 12 o'clock.
+            angle_deg = (-math.degrees(sweep_a) + 90.0) % 360.0
+            grad = QConicalGradient(QPointF(cx, cy), angle_deg)
+            grad.setColorAt(0.0, col["ink"])
+            grad.setColorAt(0.15, QColor(0, 0, 0, 0))
+            grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+            outer = QPainterPath()
+            outer.addEllipse(QPointF(cx, cy), 118, 118)
+            inner_path = QPainterPath()
+            inner_path.addEllipse(QPointF(cx, cy), 72, 72)
+            annulus = outer.subtracted(inner_path)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(grad))
+            p.drawPath(annulus)
+
+        # 6) Decoding spinner (decoding/busy/transcribing only)
+        if state in ("busy", "transcribing", "decoding"):
+            span = math.pi * 0.8
+            a0 = (self._spin_phase * 2.2 / 0.07) % (2 * math.pi)  # ~t*2.2 rad/s
+            # Simpler & matching the design: derive from t directly
+            a0 = (t * 2.2) % (2 * math.pi)
+            rect = QRectF(cx - 110, cy - 110, 220, 220)
+            # Tail (faded) behind
+            pen = QPen(col["ink"])
+            pen.setWidthF(2.0)
+            pen.setCapStyle(Qt.FlatCap)
             p.setPen(pen)
-            p.drawLine(int(cx + r1 * math.cos(a)), int(cy + r1 * math.sin(a)),
-                       int(cx + r2 * math.cos(a)), int(cy + r2 * math.sin(a)))
+            tail_start_deg = -math.degrees(a0 - 0.4) - 90.0 + 90.0  # see note below
+            # Qt arc: 0 = 3 o'clock, ccw, units = 1/16 degree.
+            # JSX angles use 0 = 3 o'clock, cw (canvas). Convert by negating.
+            start16 = int(-math.degrees(a0 - 0.4) * 16)
+            sweep16 = int(-math.degrees(0.4) * 16)
+            p.drawArc(rect, start16, sweep16)
+            # Head (bright)
+            pen = QPen(col["hi"])
+            pen.setWidthF(2.0)
+            pen.setCapStyle(Qt.FlatCap)
+            p.setPen(pen)
+            start16 = int(-math.degrees(a0) * 16)
+            sweep16 = int(-math.degrees(span) * 16)
+            p.drawArc(rect, start16, sweep16)
+            del tail_start_deg  # unused diagnostic var
 
-    def _paint_spinner(self, p: QPainter, cx: float, cy: float) -> None:
-        if self._state not in ("busy", "transcribing", "loading"):
-            return
-        r = self.RING_OUTER + 12
-        rect = QRectF(cx - r, cy - r, 2 * r, 2 * r)
-        colour = YELLOW if self._state != "loading" else CYAN
-        pen = QPen(colour, 4)
-        pen.setCapStyle(Qt.RoundCap)
-        p.setPen(pen)
-        p.drawArc(rect, int(-self._spin_angle * 16), int(self.SPIN_ARC * 16))
+        # 7) VU ring: 54 segments between r=84 and r=110
+        seg = self.VU_SEGMENTS
+        gap_deg = 1.8 if seg >= 72 else 2.4
+        seg_deg = (360.0 / seg) - gap_deg
+        base_r = 84.0
+        max_h = 26.0
+        for i in range(seg):
+            v = max(0.0, min(1.0, self._vu[i]))
+            h = 2.0 + v * max_h
+            r_mid = base_r + h / 2.0
+            # Color by state + amplitude
+            if state == "idle":
+                c = col["hi"] if v > 0.01 else col["dim"]
+            elif state in ("busy", "transcribing", "decoding"):
+                c = col["dim"]
+            else:  # rec
+                if v > 0.85:
+                    c = QColor("#ffffff")
+                elif v > 0.55:
+                    c = col["hi"]
+                else:
+                    c = col["mid"]
+            # Stroke width approximates arc segment width (cap removed)
+            # JSX computes width based on circumference; reproduce conservatively.
+            stroke_w = max(1.6, (2.0 * math.pi * r_mid) / seg - gap_deg * math.pi / 180.0 * r_mid)
+            stroke_w = max(1.4, stroke_w * 0.9)
+            pen = QPen(c)
+            pen.setWidthF(stroke_w)
+            pen.setCapStyle(Qt.FlatCap)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            # Arc angle window centered at (i * 360/seg) measured from 12 o'clock (cw)
+            c_deg_cw_from_n = (i * 360.0 / seg)
+            # Convert to Qt's coordinate system (0 = 3 o'clock, ccw)
+            start_qt_deg = 90.0 - c_deg_cw_from_n - (seg_deg / 2.0)
+            sweep_qt_deg = seg_deg
+            rect = QRectF(cx - r_mid, cy - r_mid, 2 * r_mid, 2 * r_mid)
+            p.drawArc(rect, int(start_qt_deg * 16), int(sweep_qt_deg * 16))
 
-    def _paint_pulse(self, p: QPainter, cx: float, cy: float) -> None:
-        if self._state != "recording":
-            return
-        breath = 0.5 + 0.5 * math.sin(self._pulse_phase)
-        r = self.CORE_RADIUS + 14 + 14 * breath
-        # Radial gradient for soft glow
-        grad = QRadialGradient(cx, cy, r)
-        grad.setColorAt(0.0, QColor(0, 0, 0, 0))
-        glow = QColor(RED)
-        glow.setAlpha(int(160 * (1 - breath * 0.5)))
-        grad.setColorAt(0.7, glow)
-        grad.setColorAt(1.0, QColor(0, 0, 0, 0))
-        p.setBrush(QBrush(grad))
-        p.setPen(Qt.NoPen)
-        p.drawEllipse(QPoint(int(cx), int(cy)), int(r), int(r))
+        # 8) Peak / clip chevron (rec only)
+        if state in ("recording", "rec") and self._peak["val"] > 0.5:
+            p_idx = self._peak["idx"]
+            p_ang_cw_from_n = (p_idx * 360.0 / seg)
+            # JSX: pAng = (idx*360/seg - 90) * PI/180  (radians, cw from 3 o'clock)
+            p_ang = math.radians(p_ang_cw_from_n - 90.0)
+            rr = base_r + max_h + 6
+            peak_x = cx + math.cos(p_ang) * rr
+            peak_y = cy + math.sin(p_ang) * rr
+            t_ang = p_ang + math.pi  # pointing inward
+            tip = 5.0
+            fill = QColor("#ffffff") if self._peak["val"] > 0.92 else col["hi"]
+            p.setBrush(QBrush(fill))
+            p.setPen(Qt.NoPen)
+            path = QPainterPath()
+            path.moveTo(peak_x + math.cos(t_ang + 0.35) * tip,
+                        peak_y + math.sin(t_ang + 0.35) * tip)
+            path.lineTo(peak_x, peak_y)
+            path.lineTo(peak_x + math.cos(t_ang - 0.35) * tip,
+                        peak_y + math.sin(t_ang - 0.35) * tip)
+            path.closeSubpath()
+            p.drawPath(path)
 
-    def _paint_core(self, p: QPainter, cx: float, cy: float) -> None:
-        colour = STATE_COLOR.get(self._state, CYAN)
-        r = self.CORE_RADIUS
-
-        # Outer glow
-        glow = QRadialGradient(cx, cy, r + 26)
-        glow_colour = QColor(colour)
-        glow_colour.setAlpha(110)
-        glow.setColorAt(0.6, glow_colour)
-        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
-        p.setBrush(QBrush(glow))
-        p.setPen(Qt.NoPen)
-        p.drawEllipse(QPoint(int(cx), int(cy)), r + 26, r + 26)
-
-        # Core fill: subtle radial gradient
-        if self._state == "recording":
-            fill_grad = QRadialGradient(cx, cy, r)
-            fill_grad.setColorAt(0.0, QColor(255, 90, 120))
-            fill_grad.setColorAt(1.0, RED)
-            p.setBrush(QBrush(fill_grad))
+        # 9) Inner core ring
+        core_r = self.CORE_RADIUS
+        if state in ("recording", "rec"):
+            ring_col = col["hi"]
+            ring_w = 2.0
         else:
-            p.setBrush(QBrush(QColor(10, 15, 28)))
-        pen = QPen(colour, 3)
+            ring_col = col["mid"]
+            ring_w = 1.25
+        pen = QPen(ring_col)
+        pen.setWidthF(ring_w)
         p.setPen(pen)
-        p.drawEllipse(QPoint(int(cx), int(cy)), r, r)
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(QPointF(cx, cy), core_r, core_r)
 
-        # Mic glyph
-        p.setPen(QPen(QColor(5, 7, 15) if self._state == "recording" else colour, 2))
-        f = QFont(MONO, 26, QFont.Bold)
-        p.setFont(f)
-        glyph = "◉" if self._state == "recording" else "▶"
-        p.drawText(self.rect(), Qt.AlignCenter, glyph)
+        # 10) Pulse ring (rec only)
+        if state in ("recording", "rec"):
+            pulse = (math.sin(self._pulse_phase) + 1.0) / 2.0
+            from dict.qt_design import CRIMSON
+            pc = QColor(CRIMSON)
+            pc.setAlphaF(min(1.0, 0.18 + 0.22 * pulse))
+            pen = QPen(pc)
+            pen.setWidthF(1.0)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(QPointF(cx, cy), core_r + 6 + pulse * 6, core_r + 6 + pulse * 6)
+
+        # 11) Core glyph
+        if state == "idle" or state in ("loading", "error"):
+            # Play triangle (filled)
+            p.setBrush(QBrush(col["hi"]))
+            p.setPen(Qt.NoPen)
+            path = QPainterPath()
+            path.moveTo(cx - 10, cy - 14)
+            path.lineTo(cx + 16, cy)
+            path.lineTo(cx - 10, cy + 14)
+            path.closeSubpath()
+            p.drawPath(path)
+        elif state in ("recording", "rec"):
+            # White square
+            p.setBrush(QBrush(QColor("#ffffff")))
+            p.setPen(Qt.NoPen)
+            p.drawRect(QRectF(cx - 10, cy - 10, 20, 20))
+        else:  # decoding
+            # Three pulsing dots
+            for i in (-1, 0, 1):
+                pulse = (math.sin(t * 4 - i) + 1.0) / 2.0
+                dot_col = QColor(col["hi"])
+                dot_col.setAlphaF(min(1.0, 0.4 + 0.6 * pulse))
+                p.setBrush(QBrush(dot_col))
+                p.setPen(Qt.NoPen)
+                p.drawEllipse(QPointF(cx + i * 12, cy), 3.0, 3.0)
+
+        # 12) Center crosshair (tiny +)
+        pen = QPen(QColor(205, 215, 235, int(0.25 * 255)))
+        pen.setWidthF(1.0)
+        p.setPen(pen)
+        p.drawLine(QPointF(cx - 3, cy), QPointF(cx + 3, cy))
+        p.drawLine(QPointF(cx, cy - 3), QPointF(cx, cy + 3))
 
 
 # ---------- Main window ----------------------------------------------------
