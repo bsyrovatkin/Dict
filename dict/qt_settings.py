@@ -7,7 +7,7 @@ from typing import Callable
 import keyboard as kb  # type: ignore[import]
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QSlider, QVBoxLayout, QWidget,
 )
 
@@ -35,7 +35,7 @@ class SettingsDialog(QDialog):
         self._current = current
         self._on_save = on_save
         self.setWindowTitle("Dict — settings")
-        self.setFixedSize(440, 410)  # +50 px for the new gain row
+        self.setFixedSize(440, 460)  # +50 px for the new auto-paste row
         self.setModal(True)
         self.setStyleSheet(_QSS)
 
@@ -64,6 +64,8 @@ class SettingsDialog(QDialog):
         root.addLayout(self._volume_row())
         # Mic gain row
         root.addLayout(self._gain_row())
+        # Auto-paste row
+        root.addLayout(self._auto_paste_row())
 
         root.addStretch()
 
@@ -160,6 +162,20 @@ class SettingsDialog(QDialog):
         row.addWidget(self._gain_label)
         return row
 
+    def _auto_paste_row(self) -> QHBoxLayout:
+        """Toggle: paste recognized text into focused field (Ctrl+V) vs clipboard-only."""
+        row = QHBoxLayout()
+        label = QLabel("AUTO PASTE")
+        label.setObjectName("field")
+        label.setFixedWidth(70)
+        row.addWidget(label)
+
+        self._auto_paste_cb = QCheckBox("send Ctrl+V into focused field")
+        self._auto_paste_cb.setObjectName("checkbox")
+        self._auto_paste_cb.setChecked(self._current.auto_paste)
+        row.addWidget(self._auto_paste_cb, 1)
+        return row
+
     # ---- hotkey capture ----
 
     def _start_capture(self) -> None:
@@ -206,6 +222,7 @@ class SettingsDialog(QDialog):
             language=lang_value,
             volume=self._vol_slider.value() / 100.0,
             mic_gain=self._gain_slider.value() / 10.0,
+            auto_paste=self._auto_paste_cb.isChecked(),
         )
         try:
             self._on_save(new)
@@ -319,6 +336,23 @@ QPushButton#secondary {
 }
 QPushButton#secondary:hover {
     color: #00e5ff;
+    border-color: #00e5ff;
+}
+QCheckBox#checkbox {
+    color: #c8f0ff;
+    font-family: 'Consolas';
+    font-size: 11px;
+    spacing: 8px;
+}
+QCheckBox#checkbox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #4a6978;
+    border-radius: 3px;
+    background: #0a0f1a;
+}
+QCheckBox#checkbox::indicator:checked {
+    background: #00e5ff;
     border-color: #00e5ff;
 }
 """
