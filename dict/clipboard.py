@@ -15,3 +15,11 @@ def set_text(text: str) -> bool:
     except Exception:
         log.exception("clipboard write failed")
         return False
+
+
+def get_text() -> str:
+    try:
+        return pyperclip.paste() or ""
+    except Exception:
+        log.exception("clipboard read failed")
+        return ""
