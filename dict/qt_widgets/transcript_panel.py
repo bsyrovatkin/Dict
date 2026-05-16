@@ -295,16 +295,20 @@ class TranscriptPanel(QWidget):
         self._body = _TranscriptBody()
         vh.addWidget(self._body, 1)
 
-        # Empty-state overlay label
-        self._empty_label = QLabel("waiting for audio…", self._body)
+        # Empty-state overlay label — must be a child of the QTextEdit's
+        # viewport, not the QTextEdit itself, so the viewport doesn't paint
+        # over it. raise_() pushes it on top of the viewport's own paint.
+        self._empty_label = QLabel("waiting for audio…", self._body.viewport())
         ef = QFont(FONT_RAJDHANI); ef.setPointSize(10); ef.setItalic(True)
         ef.setLetterSpacing(QFont.PercentageSpacing, 106)
         self._empty_label.setFont(ef)
         self._empty_label.setAlignment(Qt.AlignCenter)
         self._empty_label.setStyleSheet(f"color: {TEXT_DIM.name()}; background: transparent;")
+        self._empty_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._empty_label.setVisible(True)
+        self._empty_label.raise_()
         # Position immediately so it's centred even before the first resizeEvent
-        self._empty_label.setGeometry(self._body.rect())
+        self._empty_label.setGeometry(self._body.viewport().rect())
 
         # Footer with cadence + label
         footer = QWidget()
@@ -325,7 +329,7 @@ class TranscriptPanel(QWidget):
 
     def resizeEvent(self, ev) -> None:
         super().resizeEvent(ev)
-        self._empty_label.setGeometry(self._body.rect())
+        self._empty_label.setGeometry(self._body.viewport().rect())
 
     def paintEvent(self, ev) -> None:
         super().paintEvent(ev)
