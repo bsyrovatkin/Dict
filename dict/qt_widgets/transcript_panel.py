@@ -128,7 +128,7 @@ class _TranscriptBody(QTextEdit):
                 color: {TEXT_MID.name()};
                 padding: 12px 14px;
                 font-family: '{FONT_MONO}';
-                font-size: 11pt;
+                font-size: 12pt;  /* design: 12–13px body */
             }}
             QScrollBar:vertical {{
                 background: transparent;
@@ -225,18 +225,21 @@ class TranscriptPanel(QWidget):
         h.setSpacing(10)
 
         prefix = QLabel("TX/")
-        f_pref = QFont(FONT_MONO); f_pref.setPointSize(7)
+        f_pref = QFont(FONT_MONO); f_pref.setPointSize(8)  # design min 8pt
+        f_pref.setStyleHint(QFont.Monospace)
         f_pref.setLetterSpacing(QFont.PercentageSpacing, 112)
         prefix.setFont(f_pref); prefix.setStyleSheet(f"color: {TEXT_DIM.name()};")
 
         self._header_label = QLabel("LIVE TRANSCRIPT")
-        f_hdr = QFont(FONT_RAJDHANI); f_hdr.setPointSize(8); f_hdr.setWeight(QFont.DemiBold)
+        # Inner panel label: Rajdhani SemiBold 9pt
+        f_hdr = QFont(FONT_RAJDHANI); f_hdr.setPointSize(9); f_hdr.setWeight(QFont.DemiBold)
         f_hdr.setLetterSpacing(QFont.PercentageSpacing, 122)
         self._header_label.setFont(f_hdr); self._header_label.setStyleSheet(f"color: {TEXT_HI.name()};")
 
         self._activity = _ActivityDots()
         self._word_count = QLabel("0 WORDS")
-        f_wc = QFont(FONT_MONO); f_wc.setPointSize(7)
+        f_wc = QFont(FONT_MONO); f_wc.setPointSize(8)  # design min 8pt
+        f_wc.setStyleHint(QFont.Monospace)
         self._word_count.setFont(f_wc); self._word_count.setStyleSheet(f"color: {TEXT_MID.name()};")
 
         h.addWidget(prefix); h.addWidget(self._header_label); h.addStretch(1)
@@ -264,7 +267,8 @@ class TranscriptPanel(QWidget):
         fh.setSpacing(10)
         self._cadence = _CadenceTrack()
         self._footer_text = QLabel("IDLE")
-        f_ft = QFont(FONT_MONO); f_ft.setPointSize(7)
+        f_ft = QFont(FONT_MONO); f_ft.setPointSize(8)  # design min 8pt
+        f_ft.setStyleHint(QFont.Monospace)
         f_ft.setLetterSpacing(QFont.PercentageSpacing, 110)
         self._footer_text.setFont(f_ft); self._footer_text.setStyleSheet(f"color: {TEXT_DIM.name()};")
         fh.addWidget(self._cadence); fh.addStretch(1); fh.addWidget(self._footer_text)

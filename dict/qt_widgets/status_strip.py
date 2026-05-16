@@ -74,20 +74,26 @@ class StatusStrip(QWidget):
 
         self._state_label_l = self._label_dim("STATE")
         self._state_value = QLabel("IDLE")
-        font = QFont(FONT_RAJDHANI); font.setPointSize(13); font.setWeight(QFont.Bold)
+        # Large readout: Rajdhani Bold ~14pt (spec 14–20px), 0.22em tracking
+        font = QFont(FONT_RAJDHANI); font.setPointSize(14); font.setWeight(QFont.Bold)
         font.setLetterSpacing(QFont.PercentageSpacing, 122)
         self._state_value.setFont(font)
         self._state_value.setStyleSheet(f"color: {state_color('idle').name()};")
 
         self._elapsed_label_l = self._label_dim("ELAPSED")
         self._elapsed_value = QLabel("00:00.0")
-        m = QFont(FONT_MONO); m.setPointSize(10)
+        # Mono Medium for tabular numerics (spec wants tabular-nums readouts)
+        m = QFont(FONT_MONO); m.setPointSize(11); m.setWeight(QFont.Medium)
+        m.setStyleHint(QFont.Monospace)
         self._elapsed_value.setFont(m)
         self._elapsed_value.setStyleSheet(f"color: {TEXT_HI.name()};")
 
         self._peak_label_l = self._label_dim("PEAK")
         self._peak_value = QLabel("-∞ dB")
-        self._peak_value.setFont(m)
+        # Same Mono Medium, slightly dimmer color
+        mp = QFont(FONT_MONO); mp.setPointSize(11); mp.setWeight(QFont.Medium)
+        mp.setStyleHint(QFont.Monospace)
+        self._peak_value.setFont(mp)
         self._peak_value.setStyleSheet(f"color: {TEXT_MID.name()};")
 
         self._level_label_l = self._label_dim("LEVEL")
@@ -113,7 +119,9 @@ class StatusStrip(QWidget):
 
     def _label_dim(self, text: str) -> QLabel:
         lbl = QLabel(text)
-        f = QFont(FONT_MONO); f.setPointSize(7)
+        # Section label: Mono 8pt with wide tracking (design min 8pt)
+        f = QFont(FONT_MONO); f.setPointSize(8)
+        f.setStyleHint(QFont.Monospace)
         f.setLetterSpacing(QFont.PercentageSpacing, 128)
         lbl.setFont(f)
         lbl.setStyleSheet(f"color: {TEXT_DIM.name()};")

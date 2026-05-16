@@ -17,7 +17,9 @@ class _HotkeyBadge(QLabel):
     """Slab badge (clipped corners) showing the hotkey."""
     def __init__(self, label: str = "F9", parent=None) -> None:
         super().__init__(label.upper(), parent)
-        f = QFont(FONT_MONO); f.setPointSize(8); f.setWeight(QFont.DemiBold)
+        # Design spec: JetBrains Mono 600 11px ≈ 9pt for the F9 chip
+        f = QFont(FONT_MONO); f.setPointSize(9); f.setWeight(QFont.DemiBold)
+        f.setStyleHint(QFont.Monospace)
         f.setLetterSpacing(QFont.PercentageSpacing, 116)
         self.setFont(f)
         self.setAlignment(Qt.AlignCenter)
@@ -73,7 +75,8 @@ class CTABar(QWidget):
         h.setAlignment(Qt.AlignCenter)
         h.setSpacing(10)
 
-        f_mono_sm = QFont(FONT_MONO); f_mono_sm.setPointSize(7)
+        f_mono_sm = QFont(FONT_MONO); f_mono_sm.setPointSize(8)  # design min 8pt
+        f_mono_sm.setStyleHint(QFont.Monospace)
         f_mono_sm.setLetterSpacing(QFont.PercentageSpacing, 114)
 
         self._pre = QLabel("PRESS")

@@ -41,7 +41,7 @@ class CompactHistory(QWidget):
                 background-color: {SURFACE_0.name()};
                 border: none;
                 font-family: '{FONT_MONO}';
-                font-size: 9pt;
+                font-size: 10pt;  /* design: body 12–13px, list rows can be 10–11pt */
             }}
             QListWidget::item {{
                 padding: 4px 14px;
@@ -64,12 +64,15 @@ class CompactHistory(QWidget):
         hdr = QWidget(); hdr.setObjectName("hHeader")
         hh = QHBoxLayout(hdr); hh.setContentsMargins(14, 8, 14, 6); hh.setSpacing(8)
         title = QLabel("HISTORY")
-        ft = QFont(FONT_RAJDHANI); ft.setPointSize(8); ft.setWeight(QFont.DemiBold)
+        # Inner label: Rajdhani SemiBold 9pt
+        ft = QFont(FONT_RAJDHANI); ft.setPointSize(9); ft.setWeight(QFont.DemiBold)
         ft.setLetterSpacing(QFont.PercentageSpacing, 122)
         title.setFont(ft); title.setStyleSheet(f"color: {TEXT_HI.name()};")
 
         self._count_label = QLabel(f"· {len(self._history.items())} ENTRIES")
-        fc = QFont(FONT_MONO); fc.setPointSize(7); fc.setLetterSpacing(QFont.PercentageSpacing, 108)
+        fc = QFont(FONT_MONO); fc.setPointSize(8)  # design min 8pt
+        fc.setStyleHint(QFont.Monospace)
+        fc.setLetterSpacing(QFont.PercentageSpacing, 108)
         self._count_label.setFont(fc); self._count_label.setStyleSheet(f"color: {TEXT_DIM.name()};")
 
         self._toggle_btn = QPushButton("▾")

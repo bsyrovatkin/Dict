@@ -77,7 +77,8 @@ class _SectionTitle(QWidget):
     """§NN  LABEL  ───────────────── gradient line."""
     def __init__(self, num: str, label: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setFixedHeight(22)
+        # Tall enough for an 11pt Rajdhani label + its 1px bottom border
+        self.setFixedHeight(26)
         self._num = num
         self._label = label
 
@@ -85,30 +86,33 @@ class _SectionTitle(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
 
-        # §NN — mono 7pt TEXT_DIM, letter-spacing 0.1em
+        # §NN — Mono 8pt TEXT_DIM (design min 8pt)
         num_font = QFont(FONT_MONO)
-        num_font.setPointSize(7)
+        num_font.setPointSize(8)
+        num_font.setStyleHint(QFont.Monospace)
         num_font.setLetterSpacing(QFont.PercentageSpacing, 110)
         p.setFont(num_font)
         p.setPen(QPen(TEXT_DIM))
         num_text = f"§{self._num}"
         num_w = p.fontMetrics().horizontalAdvance(num_text)
-        p.drawText(0, 14, num_text)
+        # Baseline: align with LABEL baseline (drawn at y=17 below)
+        p.drawText(0, 17, num_text)
 
-        # LABEL — Rajdhani 9pt SemiBold, letter-spacing 0.24em, TEXT_HI
+        # LABEL — Rajdhani 11pt SemiBold (design: section title 11px)
         lbl_font = QFont(FONT_RAJDHANI)
-        lbl_font.setPointSize(9)
+        lbl_font.setPointSize(11)
         lbl_font.setWeight(QFont.DemiBold)
         lbl_font.setLetterSpacing(QFont.PercentageSpacing, 124)
         p.setFont(lbl_font)
         p.setPen(QPen(TEXT_HI))
         lbl_x = num_w + 10
-        p.drawText(lbl_x, 14, self._label)
+        # 11pt Rajdhani — baseline at y=17 centers it in the 26px box
+        p.drawText(lbl_x, 17, self._label)
         lbl_w = p.fontMetrics().horizontalAdvance(self._label)
 
-        # Gradient line on the right
+        # Gradient line on the right (vertically centered with text mid)
         line_x = lbl_x + lbl_w + 10
-        line_y = 12
+        line_y = 14
         line_w = max(0, self.width() - line_x)
         if line_w > 0:
             grad = QLinearGradient(line_x, 0, line_x + line_w, 0)
@@ -155,7 +159,8 @@ class _Field(QWidget):
         if hint:
             hint_lbl = QLabel(hint)
             hf = QFont(FONT_MONO)
-            hf.setPointSize(7)
+            hf.setPointSize(8)  # design min 8pt
+            hf.setStyleHint(QFont.Monospace)
             hint_lbl.setFont(hf)
             hint_lbl.setStyleSheet(f"color: {TEXT_DIM.name()};")
             h.addWidget(hint_lbl, 0)
@@ -317,10 +322,12 @@ class _LinearSlider(QWidget):
         p.setPen(pen)
         p.drawRect(thumb)
 
-        # Value label
+        # Value label — Mono Medium for tabular numerics
         vlr = self._value_label_rect()
         vf = QFont(FONT_MONO)
-        vf.setPointSize(8)
+        vf.setPointSize(9)  # was 8 — slightly more legible numeric readout
+        vf.setWeight(QFont.Medium)
+        vf.setStyleHint(QFont.Monospace)
         p.setFont(vf)
         p.setPen(QPen(TEXT_HI))
         p.drawText(vlr, Qt.AlignVCenter | Qt.AlignRight, self._formatter(self._value))
@@ -356,12 +363,12 @@ class _GainSlider(QWidget):
 
         self._live_lbl = QLabel("LIVE")
         lf = QFont(FONT_RAJDHANI)
-        lf.setPointSize(7)
+        lf.setPointSize(8)  # design min 8pt
         lf.setWeight(QFont.DemiBold)
         lf.setLetterSpacing(QFont.PercentageSpacing, 118)
         self._live_lbl.setFont(lf)
         self._live_lbl.setStyleSheet(f"color: {TEXT_DIM.name()};")
-        self._live_lbl.setFixedWidth(28)
+        self._live_lbl.setFixedWidth(32)
         row.addWidget(self._live_lbl)
 
         self._bars = _PreviewBars(self._value, self)
@@ -371,11 +378,13 @@ class _GainSlider(QWidget):
 
         self._val_lbl = QLabel(f"{self._value:.2f}×")
         vf = QFont(FONT_MONO)
-        vf.setPointSize(8)
+        vf.setPointSize(9)  # numeric readout
+        vf.setWeight(QFont.Medium)
+        vf.setStyleHint(QFont.Monospace)
         self._val_lbl.setFont(vf)
         self._val_lbl.setStyleSheet(f"color: {TEXT_HI.name()};")
         self._val_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self._val_lbl.setFixedWidth(44)
+        self._val_lbl.setFixedWidth(48)
         row.addWidget(self._val_lbl)
 
         v.addLayout(row)
@@ -497,13 +506,14 @@ class _GainTrack(QWidget):
 
         # Labels under the markers
         mf = QFont(FONT_MONO)
-        mf.setPointSize(7)
+        mf.setPointSize(8)  # design min 8pt
+        mf.setStyleHint(QFont.Monospace)
         p.setFont(mf)
         p.setPen(QPen(TEXT_DIM))
         # Approximate centering
-        p.drawText(mk1_x - 6, 32, "1×")
+        p.drawText(mk1_x - 6, 33, "1×")
         p.setPen(QPen(QColor(255, 71, 87, int(0.7 * 255))))
-        p.drawText(mk3_x - 14, 32, "CLIP")
+        p.drawText(mk3_x - 14, 33, "CLIP")
 
         # Thumb
         tx = int(x0 + tr.width() * pct)
@@ -631,8 +641,9 @@ class _HotkeyInput(QWidget):
         h.addWidget(self._value_lbl, 1)
 
         self._rebind_btn = QPushButton("REBIND")
-        rf = QFont(FONT_MONO); rf.setPointSize(7)
+        rf = QFont(FONT_MONO); rf.setPointSize(8)  # design min 8pt
         rf.setWeight(QFont.Bold)
+        rf.setStyleHint(QFont.Monospace)
         rf.setLetterSpacing(QFont.PercentageSpacing, 118)
         self._rebind_btn.setFont(rf)
         self._rebind_btn.setCursor(Qt.PointingHandCursor)
@@ -772,7 +783,8 @@ class SettingsDialog(QDialog):
 
         # CFG/
         cfg = QLabel("CFG/")
-        f1 = QFont(FONT_MONO); f1.setPointSize(7)
+        f1 = QFont(FONT_MONO); f1.setPointSize(8)  # design min 8pt
+        f1.setStyleHint(QFont.Monospace)
         f1.setLetterSpacing(QFont.PercentageSpacing, 112)
         cfg.setFont(f1)
         cfg.setStyleSheet(f"color: {TEXT_DIM.name()};")
@@ -780,7 +792,7 @@ class SettingsDialog(QDialog):
 
         # SETTINGS
         title = QLabel("SETTINGS")
-        f2 = QFont(FONT_RAJDHANI); f2.setPointSize(9); f2.setWeight(QFont.DemiBold)
+        f2 = QFont(FONT_RAJDHANI); f2.setPointSize(11); f2.setWeight(QFont.DemiBold)
         f2.setLetterSpacing(QFont.PercentageSpacing, 128)
         title.setFont(f2)
         title.setStyleSheet(f"color: {TEXT_HI.name()};")
@@ -888,7 +900,8 @@ class SettingsDialog(QDialog):
         h.setSpacing(8)
 
         esc = QLabel("ESC · CLOSE")
-        ef = QFont(FONT_MONO); ef.setPointSize(7)
+        ef = QFont(FONT_MONO); ef.setPointSize(8)  # design min 8pt
+        ef.setStyleHint(QFont.Monospace)
         ef.setLetterSpacing(QFont.PercentageSpacing, 108)
         esc.setFont(ef)
         esc.setStyleSheet(f"color: {TEXT_DIM.name()};")
@@ -897,7 +910,7 @@ class SettingsDialog(QDialog):
         h.addStretch()
 
         apply_btn = QPushButton("APPLY")
-        af = QFont(FONT_RAJDHANI); af.setPointSize(8); af.setWeight(QFont.Bold)
+        af = QFont(FONT_RAJDHANI); af.setPointSize(9); af.setWeight(QFont.Bold)
         af.setLetterSpacing(QFont.PercentageSpacing, 120)
         apply_btn.setFont(af)
         apply_btn.setCursor(Qt.PointingHandCursor)

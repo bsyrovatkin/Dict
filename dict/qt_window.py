@@ -137,6 +137,33 @@ class RecordWidget(QWidget):
         self._vu: list[float] = [0.0] * self.VU_SEGMENTS
         self._peak = {"idx": 0, "val": 0.0, "t": 0.0}
 
+        # --- Equalizer per-segment characteristics (precomputed) -----------
+        # Each segment behaves like its own EQ band: a "frequency speed"
+        # (fast for 0°/180° = "highs", slow for 90°/270° = "lows"), a unique
+        # phase offset so the ring ripples, a per-segment decay, and a small
+        # random hiss multiplier. Pre-computing avoids per-frame allocations.
+        self._band_speed: list[float] = []
+        self._band_phase: list[float] = []
+        self._band_decay: list[float] = []
+        self._band_hiss:  list[float] = []
+        for i in range(self.VU_SEGMENTS):
+            ang = i * 2 * math.pi / self.VU_SEGMENTS
+            # 4..12 — slowest at the cardinal sides, fastest at top/bottom
+            speed = 4.0 + 8.0 * abs(math.cos(ang))
+            self._band_speed.append(speed)
+            self._band_phase.append(i * 0.28)
+            self._band_decay.append(0.40 if speed > 8.0 else 0.25)
+            # Subtle, fixed per-segment hiss factor 0.85..1.00 (no per-frame RNG)
+            self._band_hiss.append(0.85 + 0.15 * self._random.random())
+
+        # Per-segment afterglow timestamp: when did each segment last cross 0.7?
+        self._afterglow: list[float] = [-1e9] * self.VU_SEGMENTS
+
+        # --- Decoding "brewing" state --------------------------------------
+        self._pings: list[dict] = []        # active sonar pings
+        self._last_ping_ms: float = -1e9
+        self._particles: list[dict] = []    # tiny flickering data dots
+
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(33)  # ~30 fps
@@ -188,23 +215,57 @@ class RecordWidget(QWidget):
         self._t_ms += 33.0
         t = self._t_ms / 1000.0  # seconds
 
-        # Update VU envelope per state — mirrors JSX `tick()` lines 47-61
+        # Update VU envelope per state
         state = self._state
         if state in ("recording", "rec"):
-            # When we have a live mic level use it as a multiplier so the bars
-            # actually reflect speech volume; otherwise leave the random
-            # envelope at full intensity.
-            mult = max(0.2, self._level if self._level > 0 else 1.0)
+            # Equalizer-style: drive segments from real input level + per-band
+            # response curves. Never fully flat — keep a floor so the ring
+            # always "breathes" a bit when mic is silent.
+            master = max(0.05, self._level)
             for i in range(self.VU_SEGMENTS):
-                target = (0.25 + self._random.random() * 0.75
-                          * (0.5 + 0.5 * math.sin(t * 6 + i * 0.4))) * mult
-                self._vu[i] += (target - self._vu[i]) * 0.35
+                # Sinusoidal band envelope, unique speed + phase per segment
+                band_env = 0.5 + 0.5 * math.sin(
+                    t * self._band_speed[i] + self._band_phase[i]
+                )
+                target = master * band_env * self._band_hiss[i]
+                # Mild per-frame hiss without per-segment RNG cost
+                target *= 0.92 + 0.08 * math.sin(t * 17.0 + i)
+                self._vu[i] += (target - self._vu[i]) * self._band_decay[i]
+                # After-glow: remember the time when a segment crossed 0.7
+                if self._vu[i] > 0.7:
+                    self._afterglow[i] = self._t_ms
         elif state in ("busy", "transcribing", "decoding"):
             for i in range(self.VU_SEGMENTS):
                 self._vu[i] += (0.08 - self._vu[i]) * 0.2
+            # --- Sonar pings: spawn one every ~800ms ---
+            if self._t_ms - self._last_ping_ms > 800.0:
+                self._pings.append({"start": self._t_ms})
+                self._last_ping_ms = self._t_ms
+            # Cull expired pings (lifetime ~1600ms — long enough to overlap 2)
+            self._pings = [
+                pg for pg in self._pings if self._t_ms - pg["start"] < 1600.0
+            ]
+            # --- Speech / data particles (5-8 alive at once) ---
+            if len(self._particles) < 6:
+                import random as _r
+                self._particles.append({
+                    "x": _r.uniform(-70.0, 70.0),
+                    "y": _r.uniform(-70.0, 70.0),
+                    "start": self._t_ms,
+                    "life": _r.uniform(450.0, 750.0),
+                })
+            self._particles = [
+                pt for pt in self._particles
+                if self._t_ms - pt["start"] < pt["life"]
+            ]
         else:
             for i in range(self.VU_SEGMENTS):
                 self._vu[i] += (0.0 - self._vu[i]) * 0.15
+            # Clear decoding state when leaving the state
+            if self._pings:
+                self._pings.clear()
+            if self._particles:
+                self._particles.clear()
 
         # Peak tracker with slow decay
         max_i = 0
@@ -305,40 +366,55 @@ class RecordWidget(QWidget):
             p.setBrush(QBrush(grad))
             p.drawPath(annulus)
 
-        # 6) Decoding spinner (decoding/busy/transcribing only)
+        # 6) Decoding multi-arc spinner + sonar pings (busy/transcribing only)
         if state in ("busy", "transcribing", "decoding"):
-            span = math.pi * 0.8
-            a0 = (self._spin_phase * 2.2 / 0.07) % (2 * math.pi)  # ~t*2.2 rad/s
-            # Simpler & matching the design: derive from t directly
-            a0 = (t * 2.2) % (2 * math.pi)
-            rect = QRectF(cx - 110, cy - 110, 220, 220)
-            # Tail (faded) behind
-            pen = QPen(col["ink"])
-            pen.setWidthF(2.0)
-            pen.setCapStyle(Qt.FlatCap)
-            p.setPen(pen)
-            tail_start_deg = -math.degrees(a0 - 0.4) - 90.0 + 90.0  # see note below
-            # Qt arc: 0 = 3 o'clock, ccw, units = 1/16 degree.
-            # JSX angles use 0 = 3 o'clock, cw (canvas). Convert by negating.
-            start16 = int(-math.degrees(a0 - 0.4) * 16)
-            sweep16 = int(-math.degrees(0.4) * 16)
-            p.drawArc(rect, start16, sweep16)
-            # Head (bright)
-            pen = QPen(col["hi"])
-            pen.setWidthF(2.0)
-            pen.setCapStyle(Qt.FlatCap)
-            p.setPen(pen)
-            start16 = int(-math.degrees(a0) * 16)
-            sweep16 = int(-math.degrees(span) * 16)
-            p.drawArc(rect, start16, sweep16)
-            del tail_start_deg  # unused diagnostic var
+            # --- Color drift: amber <-> faintly cooler amber/green mix ---
+            # 0..1 swing every ~4s. Blend 80% amber + 20% green at peak.
+            drift = (math.sin(t * (2 * math.pi / 4.0)) + 1.0) / 2.0
+            hi = col["hi"]
+            ink = col["ink"]
+            # GREEN from design palette (#6bffb3)
+            mix_r = int(hi.red()   * (1 - 0.20 * drift) + 0x6b * 0.20 * drift)
+            mix_g = int(hi.green() * (1 - 0.20 * drift) + 0xff * 0.20 * drift)
+            mix_b = int(hi.blue()  * (1 - 0.20 * drift) + 0xb3 * 0.20 * drift)
+            mix_hi = QColor(mix_r, mix_g, mix_b)
+            mix_ink = QColor(mix_r, mix_g, mix_b, ink.alpha())
+
+            # --- Sonar pings: expanding fading rings r=58 -> r=170 ---
+            for pg in self._pings:
+                age = self._t_ms - pg["start"]
+                k = age / 1600.0
+                if 0.0 <= k <= 1.0:
+                    r_ping = 58.0 + (170.0 - 58.0) * k
+                    # Fade in then out, accentuating mid-life
+                    alpha = int(180.0 * (1.0 - k) * (0.4 + 0.6 * min(1.0, k * 2.5)))
+                    pc = QColor(mix_hi.red(), mix_hi.green(), mix_hi.blue(), max(0, alpha))
+                    pen_p = QPen(pc); pen_p.setWidthF(1.2); pen_p.setCapStyle(Qt.RoundCap)
+                    p.setPen(pen_p); p.setBrush(Qt.NoBrush)
+                    p.drawEllipse(QPointF(cx, cy), r_ping, r_ping)
+
+            # --- Multi-arc spinner: three short arcs, different radii/speed/dir ---
+            # Each arc spans ~0.4*pi; r1 CW fast, r2 CCW slower, r3 CW slowest.
+            specs = (
+                (110.0, +2.4, 0.40, 0.00, hi,      2.0),  # outer, bright
+                ( 95.0, -1.6, 0.42, 1.10, mix_hi,  1.4),  # middle, drifty
+                ( 80.0, +1.1, 0.38, 2.20, mix_ink, 1.2),  # inner, soft
+            )
+            for r_arc, omega, span_rad, phase0, color, width in specs:
+                a0 = (t * omega + phase0) % (2 * math.pi)
+                rect_a = QRectF(cx - r_arc, cy - r_arc, 2 * r_arc, 2 * r_arc)
+                pen_a = QPen(color); pen_a.setWidthF(width); pen_a.setCapStyle(Qt.RoundCap)
+                p.setPen(pen_a); p.setBrush(Qt.NoBrush)
+                start16 = int(-math.degrees(a0) * 16)
+                sweep16 = int(-math.degrees(span_rad) * 16)
+                p.drawArc(rect_a, start16, sweep16)
 
         # 7) VU ring: 54 segments between r=84 and r=110
         seg = self.VU_SEGMENTS
         gap_deg = 1.8 if seg >= 72 else 2.4
         seg_deg = (360.0 / seg) - gap_deg
         base_r = 84.0
-        max_h = 26.0
+        max_h = 30.0  # was 26 — let the ring breathe more during REC
         for i in range(seg):
             v = max(0.0, min(1.0, self._vu[i]))
             h = 2.0 + v * max_h
@@ -348,10 +424,13 @@ class RecordWidget(QWidget):
                 c = col["hi"] if v > 0.01 else col["dim"]
             elif state in ("busy", "transcribing", "decoding"):
                 c = col["dim"]
-            else:  # rec
+            else:  # rec — equalizer look with afterglow
+                # Afterglow: any segment that crossed 0.7 in the last 200ms
+                # stays bright until the timer expires.
+                glowing = (self._t_ms - self._afterglow[i]) < 200.0
                 if v > 0.85:
                     c = QColor("#ffffff")
-                elif v > 0.55:
+                elif glowing or v > 0.55:
                     c = col["hi"]
                 else:
                     c = col["mid"]
@@ -383,7 +462,7 @@ class RecordWidget(QWidget):
             peak_y = cy + math.sin(p_ang) * rr
             t_ang = p_ang + math.pi  # pointing inward
             tip = 5.0
-            fill = QColor("#ffffff") if self._peak["val"] > 0.92 else col["hi"]
+            fill = QColor("#ffffff") if self._peak["val"] > 0.85 else col["hi"]
             p.setBrush(QBrush(fill))
             p.setPen(Qt.NoPen)
             path = QPainterPath()
@@ -437,15 +516,42 @@ class RecordWidget(QWidget):
             p.setBrush(QBrush(QColor("#ffffff")))
             p.setPen(Qt.NoPen)
             p.drawRect(QRectF(cx - 10, cy - 10, 20, 20))
-        else:  # decoding
-            # Three pulsing dots
+        else:  # decoding — "brewing" core
+            # Speech / data particles flicker inside the inner annulus first
+            # so dots + ring sit on top.
+            for pt in self._particles:
+                age = self._t_ms - pt["start"]
+                k = age / max(1.0, pt["life"])
+                # Fade-in/out triangle envelope
+                env = 1.0 - abs(2.0 * k - 1.0)
+                env = max(0.0, min(1.0, env))
+                pcol = QColor(col["hi"])
+                pcol.setAlphaF(0.65 * env)
+                p.setBrush(QBrush(pcol))
+                p.setPen(Qt.NoPen)
+                # Particle size 0.9..1.6 px, plus a slight twinkle
+                r_pt = 0.9 + 0.7 * env
+                p.drawEllipse(QPointF(cx + pt["x"], cy + pt["y"]), r_pt, r_pt)
+
+            # Faint contracting/expanding outer ring around the core dots
+            ring_pulse = (math.sin(t * 3.2) + 1.0) / 2.0
+            outer_r = 22.0 + 8.0 * ring_pulse
+            rc = QColor(col["hi"])
+            rc.setAlphaF(0.18 + 0.18 * (1.0 - ring_pulse))
+            pen_r = QPen(rc); pen_r.setWidthF(1.0)
+            p.setPen(pen_r); p.setBrush(Qt.NoBrush)
+            p.drawEllipse(QPointF(cx, cy), outer_r, outer_r)
+
+            # Three deeply pulsing dots (0.2 .. 1.0 alpha range)
             for i in (-1, 0, 1):
                 pulse = (math.sin(t * 4 - i) + 1.0) / 2.0
                 dot_col = QColor(col["hi"])
-                dot_col.setAlphaF(min(1.0, 0.4 + 0.6 * pulse))
+                dot_col.setAlphaF(min(1.0, 0.2 + 0.8 * pulse))
                 p.setBrush(QBrush(dot_col))
                 p.setPen(Qt.NoPen)
-                p.drawEllipse(QPointF(cx + i * 12, cy), 3.0, 3.0)
+                # Dot size also breathes slightly with the pulse
+                rr = 3.0 + 0.6 * pulse
+                p.drawEllipse(QPointF(cx + i * 12, cy), rr, rr)
 
         # 12) Center crosshair (tiny +)
         pen = QPen(QColor(205, 215, 235, int(0.25 * 255)))
@@ -523,13 +629,14 @@ class _HotkeySlab(QWidget):
     def sizeHint(self) -> QSize:
         from dict.qt_design import FONT_MONO
         f = QFont(FONT_MONO)
-        f.setPointSize(7)
+        f.setPointSize(8)  # design: 10px ≈ 8pt (was 7)
+        f.setWeight(QFont.Medium)
         from PySide6.QtGui import QFontMetrics
         fm = QFontMetrics(f)
         # 8px left pad + "HOTKEY " + label + 8px right pad + 4px extra
         w = fm.horizontalAdvance("HOTKEY ") + fm.horizontalAdvance(self._label) + 24
         h = fm.height() + 8
-        return QSize(max(w, 60), max(h, 18))
+        return QSize(max(w, 60), max(h, 20))
 
     def minimumSizeHint(self) -> QSize:
         return self.sizeHint()
@@ -559,7 +666,8 @@ class _HotkeySlab(QWidget):
 
         # Draw text: "HOTKEY " in dim, then label in hi
         f = QFont(FONT_MONO)
-        f.setPointSize(7)
+        f.setPointSize(8)  # design: 10px ≈ 8pt (was 7)
+        f.setWeight(QFont.Medium)
         from PySide6.QtGui import QFontMetrics
         fm = QFontMetrics(f)
         p.setFont(f)
@@ -608,13 +716,13 @@ class _StatusPill(QWidget):
     def sizeHint(self) -> QSize:
         from dict.qt_design import FONT_RAJDHANI
         f = QFont(FONT_RAJDHANI)
-        f.setPointSize(7)
-        f.setWeight(QFont.Bold)
+        f.setPointSize(8)  # was 7 — design min 8pt for Rajdhani labels
+        f.setWeight(QFont.DemiBold)
         from PySide6.QtGui import QFontMetrics
         fm = QFontMetrics(f)
         max_label = "DECODING"
         w = 8 + 8 + 6 + fm.horizontalAdvance(max_label) + 10 + 8  # marker + gap + text + pad
-        h = max(22, fm.height() + 8)
+        h = max(24, fm.height() + 8)
         return QSize(w, h)
 
     def paintEvent(self, _ev) -> None:
@@ -700,9 +808,9 @@ class _StatusPill(QWidget):
             text_col = col
 
         f = QFont(FONT_RAJDHANI)
-        f.setPointSize(7)
-        f.setWeight(QFont.Bold)
-        f.setLetterSpacing(QFont.AbsoluteSpacing, 1.0)  # ~0.18em at 7pt ≈ 1px
+        f.setPointSize(8)  # was 7 — design min 8pt
+        f.setWeight(QFont.DemiBold)
+        f.setLetterSpacing(QFont.PercentageSpacing, 122)  # 0.22em tracking
         p.setFont(f)
         p.setPen(text_col)
         # Position text after marker (marker occupies first ~16px) + 6px gap
@@ -753,7 +861,8 @@ class _HeaderWidget(QWidget):
         f_dict = QFont(FONT_RAJDHANI)
         f_dict.setPointSize(18)
         f_dict.setWeight(QFont.Bold)
-        f_dict.setLetterSpacing(QFont.AbsoluteSpacing, 5.0)  # ~0.32em at 18pt ≈ 5–6px
+        # 0.32em tracking — PercentageSpacing renders more reliably across DPIs
+        f_dict.setLetterSpacing(QFont.PercentageSpacing, 132)
         dict_label.setFont(f_dict)
         dict_label.setStyleSheet(f"color: {TEXT_HI.name()};")
         bg_layout.addWidget(dict_label)
