@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import numpy as np
 
-from dict.recorder import _linear_resample, apply_gain, should_drop_recording
+from dict import config
+from dict.recorder import Recorder, _linear_resample, apply_gain, should_drop_recording
 
 
 def test_drops_too_short():
@@ -66,3 +69,38 @@ def test_linear_resample_downsamples():
     out = _linear_resample(audio, 32000, 16000)
     assert out.size == 50
     assert out.dtype == np.int16
+
+
+def test_set_push_callback_invoked_on_chunk():
+    r = Recorder()
+    cb = MagicMock()
+    r.set_push_callback(cb)
+    # Synthesize a sounddevice callback at the same native==target SR
+    r._native_sr = config.SAMPLE_RATE
+    chunk = np.ones((512, 1), dtype=np.int16) * 100
+    r._on_audio(chunk, 512, time_info=None, status=None)
+    cb.assert_called_once()
+    arg = cb.call_args[0][0]
+    assert arg.shape == (512,)
+
+
+def test_set_push_callback_none_disables_invocation():
+    r = Recorder()
+    cb = MagicMock()
+    r.set_push_callback(cb)
+    r.set_push_callback(None)
+    r._native_sr = config.SAMPLE_RATE
+    chunk = np.ones((512, 1), dtype=np.int16) * 100
+    r._on_audio(chunk, 512, time_info=None, status=None)
+    cb.assert_not_called()
+
+
+def test_push_callback_exception_does_not_break_audio_thread(caplog):
+    r = Recorder()
+    cb = MagicMock(side_effect=RuntimeError("kaboom"))
+    r.set_push_callback(cb)
+    r._native_sr = config.SAMPLE_RATE
+    chunk = np.ones((512, 1), dtype=np.int16) * 100
+    # Must not raise
+    r._on_audio(chunk, 512, time_info=None, status=None)
+    cb.assert_called_once()

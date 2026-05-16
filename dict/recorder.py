@@ -113,9 +113,19 @@ class Recorder:
         self._lock = threading.Lock()
         self._level_cb: Optional[Callable[[float], None]] = None
         self._gain: float = 1.0
+        self._push_cb: Optional[Callable[[np.ndarray], None]] = None
 
     def set_level_callback(self, cb: Optional[Callable[[float], None]]) -> None:
         self._level_cb = cb
+
+    def set_push_callback(self, cb: Optional[Callable[[np.ndarray], None]]) -> None:
+        """Receive resampled int16 chunks at TARGET_SR for downstream streaming.
+
+        Invoked from the PortAudio callback thread AFTER the chunk is stored
+        in _chunks for the full-buffer fallback. Exceptions are caught here
+        so the audio thread cannot die.
+        """
+        self._push_cb = cb
 
     def set_gain(self, gain: float) -> None:
         """Software gain (1.0 = unity). Applied to both transcription audio
@@ -225,3 +235,13 @@ class Recorder:
                 cb(level)
             except Exception:
                 log.exception("level callback raised")
+        push = self._push_cb
+        if push is not None:
+            try:
+                if self._native_sr != self._target_sr:
+                    pushed = _linear_resample(chunk, self._native_sr, self._target_sr)
+                else:
+                    pushed = chunk
+                push(pushed)
+            except Exception:
+                log.exception("push_callback raised")
