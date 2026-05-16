@@ -185,6 +185,13 @@ def main() -> int:
             effective_hotkey = config.HOTKEY
             user_settings.hotkey = effective_hotkey
             settings_mod.save(user_settings)
+        if "v" in [p.strip().lower() for p in effective_hotkey.split("+")]:
+            log.warning(
+                "configured hotkey %r contains 'v'; auto-paste sends Ctrl+V — "
+                "this may cause feedback loops or double-firing. Consider a "
+                "different binding.",
+                effective_hotkey,
+            )
         effective_model = user_settings.model_size or config.MODEL_SIZE
 
         # Business layer (unchanged)
@@ -194,6 +201,22 @@ def main() -> int:
 
         controller_holder: dict[str, Controller] = {}
         hotkey_holder: dict[str, HotkeyWatcher] = {}
+        window_holder: dict[str, MainWindow] = {}
+
+        def _on_partial(text: str) -> None:
+            w = window_holder.get("w")
+            if w is not None:
+                w.append_partial(text)
+
+        from dict.streaming import VadStreamer
+        from dict.paste import paste_text
+        streamer = VadStreamer(
+            transcriber=transcriber,
+            on_partial=_on_partial,
+            pause_ms=config.STREAM_PAUSE_MS,
+            hard_cap_s=config.STREAM_HARD_CAP_S,
+            sample_rate=config.SAMPLE_RATE,
+        )
 
         def _on_button_toggle() -> None:
             c = controller_holder.get("c")
@@ -221,6 +244,7 @@ def main() -> int:
             on_close=_on_close_app,
             hotkey_label=_pretty_hotkey(effective_hotkey),
         )
+        window_holder["w"] = window
 
         # Simple tray facade so Controller can call set_state/notify without
         # owning a real Tray instance at construction time.
@@ -246,6 +270,10 @@ def main() -> int:
             sounds=sounds,
             clipboard_set=clipboard.set_text,
             logger_append=logger_mod.append,
+            streamer=streamer,
+            paste=paste_text,
+            get_current_hotkey=lambda: effective_hotkey,
+            auto_paste=user_settings.auto_paste,
             auto_show_seconds=config.AUTO_SHOW_SECONDS,
         )
         controller_holder["c"] = controller
@@ -279,12 +307,16 @@ def main() -> int:
             # Apply gain live so user can tune sensitivity without restart
             if new.mic_gain != user_settings.mic_gain:
                 recorder.set_gain(new.mic_gain)
+            if new.auto_paste != user_settings.auto_paste:
+                controller._auto_paste = new.auto_paste  # live toggle
+                log.info("auto_paste -> %s", new.auto_paste)
             # mutate user_settings reference so next dialog reads new values
             user_settings.hotkey = new.hotkey
             user_settings.model_size = new.model_size
             user_settings.language = new.language
             user_settings.volume = new.volume
             user_settings.mic_gain = new.mic_gain
+            user_settings.auto_paste = new.auto_paste
             log.info("settings applied (model/lang changes take effect next restart)")
 
         window.set_state("loading")
