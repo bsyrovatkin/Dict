@@ -47,7 +47,7 @@ STREAM_HARD_CAP_S = 4.0      # max speech-only seconds in a segment before force
 STREAM_HARD_CAP_ELAPSED_S = 3.0  # wall-clock cap including inter-phrase pauses
 
 # Real-time preview transcription (sliding window on uncommitted audio)
-PREVIEW_INTERVAL_S = 1.5     # how often to re-run Whisper on pending audio
+PREVIEW_INTERVAL_S = 2.5     # how often to re-run Whisper on pending audio (was 1.5 — slower = less flicker)
 PREVIEW_WINDOW_S = 4.0       # transcribe the last N seconds of pending audio
 
 # Icon filenames (inside ASSETS_DIR)

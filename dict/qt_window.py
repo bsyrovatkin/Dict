@@ -219,9 +219,10 @@ class RecordWidget(QWidget):
         state = self._state
         if state in ("recording", "rec"):
             # Equalizer-style: drive segments from real input level + per-band
-            # response curves. Never fully flat — keep a floor so the ring
-            # always "breathes" a bit when mic is silent.
-            master = max(0.05, self._level)
+            # response curves. Never fully flat — keep a generous floor so the
+            # ring is visibly alive even in silence (user feedback: "no
+            # animation visible during recording").
+            master = max(0.15, self._level)
             for i in range(self.VU_SEGMENTS):
                 # Sinusoidal band envelope, unique speed + phase per segment
                 band_env = 0.5 + 0.5 * math.sin(
@@ -237,22 +238,22 @@ class RecordWidget(QWidget):
         elif state in ("busy", "transcribing", "decoding"):
             for i in range(self.VU_SEGMENTS):
                 self._vu[i] += (0.08 - self._vu[i]) * 0.2
-            # --- Sonar pings: spawn one every ~800ms ---
-            if self._t_ms - self._last_ping_ms > 800.0:
+            # --- Sonar pings: spawn one every ~500ms (was 800 — denser) ---
+            if self._t_ms - self._last_ping_ms > 500.0:
                 self._pings.append({"start": self._t_ms})
                 self._last_ping_ms = self._t_ms
-            # Cull expired pings (lifetime ~1600ms — long enough to overlap 2)
+            # Cull expired pings (lifetime ~1600ms — long enough to overlap 3)
             self._pings = [
                 pg for pg in self._pings if self._t_ms - pg["start"] < 1600.0
             ]
-            # --- Speech / data particles (5-8 alive at once) ---
-            if len(self._particles) < 6:
+            # --- Speech / data particles (up to 12 alive at once) ---
+            if len(self._particles) < 12:
                 import random as _r
                 self._particles.append({
                     "x": _r.uniform(-70.0, 70.0),
                     "y": _r.uniform(-70.0, 70.0),
                     "start": self._t_ms,
-                    "life": _r.uniform(450.0, 750.0),
+                    "life": _r.uniform(600.0, 900.0),
                 })
             self._particles = [
                 pt for pt in self._particles
@@ -311,6 +312,14 @@ class RecordWidget(QWidget):
             r2 = self.R_OUT + 4
             p.drawLine(QPointF(cx + math.cos(a) * r1, cy + math.sin(a) * r1),
                        QPointF(cx + math.cos(a) * r2, cy + math.sin(a) * r2))
+
+        # 1b) Bold state-color border ring at r=174 (non-idle only).
+        # Forces the user to see the widget is alive in this state.
+        if state != "idle" and state != "loading":
+            ring_col = QColor(col["hi"]); ring_col.setAlpha(200)
+            ring_pen = QPen(ring_col); ring_pen.setWidthF(3.0); ring_pen.setCapStyle(Qt.RoundCap)
+            p.setPen(ring_pen); p.setBrush(Qt.NoBrush)
+            p.drawEllipse(QPointF(cx, cy), 174.0, 174.0)
 
         # 2) Corner brackets at BR=178, inset 68% from center
         pen = QPen(col["ink"])
@@ -386,19 +395,21 @@ class RecordWidget(QWidget):
                 k = age / 1600.0
                 if 0.0 <= k <= 1.0:
                     r_ping = 58.0 + (170.0 - 58.0) * k
-                    # Fade in then out, accentuating mid-life
-                    alpha = int(180.0 * (1.0 - k) * (0.4 + 0.6 * min(1.0, k * 2.5)))
+                    # Fade in then out, accentuating mid-life. Brighter than
+                    # before (220 cap, was 180) so pings are unmistakable.
+                    alpha = int(220.0 * (1.0 - k) * (0.4 + 0.6 * min(1.0, k * 2.5)))
                     pc = QColor(mix_hi.red(), mix_hi.green(), mix_hi.blue(), max(0, alpha))
-                    pen_p = QPen(pc); pen_p.setWidthF(1.2); pen_p.setCapStyle(Qt.RoundCap)
+                    pen_p = QPen(pc); pen_p.setWidthF(2.4); pen_p.setCapStyle(Qt.RoundCap)
                     p.setPen(pen_p); p.setBrush(Qt.NoBrush)
                     p.drawEllipse(QPointF(cx, cy), r_ping, r_ping)
 
             # --- Multi-arc spinner: three short arcs, different radii/speed/dir ---
-            # Each arc spans ~0.4*pi; r1 CW fast, r2 CCW slower, r3 CW slowest.
+            # Widened arc spans + thicker strokes so the spinner reads clearly
+            # even at a glance (user feedback: "круг пропал в decoding").
             specs = (
-                (110.0, +2.4, 0.40, 0.00, hi,      2.0),  # outer, bright
-                ( 95.0, -1.6, 0.42, 1.10, mix_hi,  1.4),  # middle, drifty
-                ( 80.0, +1.1, 0.38, 2.20, mix_ink, 1.2),  # inner, soft
+                (110.0, +2.4, 0.55 * math.pi, 0.00, hi,      2.6),  # outer, bright
+                ( 95.0, -1.6, 0.55 * math.pi, 1.10, mix_hi,  2.0),  # middle, drifty
+                ( 80.0, +1.1, 0.45 * math.pi, 2.20, mix_ink, 1.6),  # inner, soft
             )
             for r_arc, omega, span_rad, phase0, color, width in specs:
                 a0 = (t * omega + phase0) % (2 * math.pi)
@@ -409,12 +420,21 @@ class RecordWidget(QWidget):
                 sweep16 = int(-math.degrees(span_rad) * 16)
                 p.drawArc(rect_a, start16, sweep16)
 
+            # --- Radar scan beam: thin amber line sweeping from center to r=110 ---
+            beam_a = (t * 2.0) % (2 * math.pi)
+            beam_dx = math.cos(beam_a - math.pi / 2) * 110.0
+            beam_dy = math.sin(beam_a - math.pi / 2) * 110.0
+            beam_col = QColor(hi.red(), hi.green(), hi.blue(), 153)  # ~0.6 alpha
+            pen_beam = QPen(beam_col); pen_beam.setWidthF(1.5); pen_beam.setCapStyle(Qt.RoundCap)
+            p.setPen(pen_beam); p.setBrush(Qt.NoBrush)
+            p.drawLine(QPointF(cx, cy), QPointF(cx + beam_dx, cy + beam_dy))
+
         # 7) VU ring: 54 segments between r=84 and r=110
         seg = self.VU_SEGMENTS
         gap_deg = 1.8 if seg >= 72 else 2.4
         seg_deg = (360.0 / seg) - gap_deg
         base_r = 84.0
-        max_h = 30.0  # was 26 — let the ring breathe more during REC
+        max_h = 38.0  # was 30 — even more breathing room for the REC equalizer
         for i in range(seg):
             v = max(0.0, min(1.0, self._vu[i]))
             h = 2.0 + v * max_h
@@ -488,7 +508,8 @@ class RecordWidget(QWidget):
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(QPointF(cx, cy), core_r, core_r)
 
-        # 10) Pulse ring (rec only)
+        # 10) Pulse ring (rec only) — original core pulse plus a HUGE outer
+        # breathing ring at r~128 so REC state is visually unmistakable from idle.
         if state in ("recording", "rec"):
             pulse = (math.sin(self._pulse_phase) + 1.0) / 2.0
             from dict.qt_design import CRIMSON
@@ -499,6 +520,13 @@ class RecordWidget(QWidget):
             p.setPen(pen)
             p.setBrush(Qt.NoBrush)
             p.drawEllipse(QPointF(cx, cy), core_r + 6 + pulse * 6, core_r + 6 + pulse * 6)
+            # Outer breathing ring: fat 4px crimson at r=128 + 12*sin
+            big_r = 128.0 + 12.0 * math.sin(self._pulse_phase)
+            big_col = QColor(CRIMSON)
+            big_col.setAlphaF(min(1.0, 0.40 + 0.30 * pulse))
+            big_pen = QPen(big_col); big_pen.setWidthF(4.0); big_pen.setCapStyle(Qt.RoundCap)
+            p.setPen(big_pen); p.setBrush(Qt.NoBrush)
+            p.drawEllipse(QPointF(cx, cy), big_r, big_r)
 
         # 11) Core glyph
         if state == "idle" or state in ("loading", "error"):
@@ -512,10 +540,20 @@ class RecordWidget(QWidget):
             path.closeSubpath()
             p.drawPath(path)
         elif state in ("recording", "rec"):
-            # White square
+            # Crimson radial-gradient halo behind the stop square so the core
+            # reads "active recording" at a glance.
+            from PySide6.QtGui import QRadialGradient as _QRG
+            from dict.qt_design import CRIMSON as _CR
+            halo = _QRG(QPointF(cx, cy), 28.0)
+            hc = QColor(_CR); hc.setAlpha(180)
+            halo.setColorAt(0.0, hc)
+            halo.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.setBrush(QBrush(halo)); p.setPen(Qt.NoPen)
+            p.drawEllipse(QPointF(cx, cy), 28.0, 28.0)
+            # Bold white square (24x24, was 20x20)
             p.setBrush(QBrush(QColor("#ffffff")))
             p.setPen(Qt.NoPen)
-            p.drawRect(QRectF(cx - 10, cy - 10, 20, 20))
+            p.drawRect(QRectF(cx - 12, cy - 12, 24, 24))
         else:  # decoding — "brewing" core
             # Speech / data particles flicker inside the inner annulus first
             # so dots + ring sit on top.
@@ -529,16 +567,16 @@ class RecordWidget(QWidget):
                 pcol.setAlphaF(0.65 * env)
                 p.setBrush(QBrush(pcol))
                 p.setPen(Qt.NoPen)
-                # Particle size 0.9..1.6 px, plus a slight twinkle
-                r_pt = 0.9 + 0.7 * env
+                # Particle size 2.0..3.0 px (was 0.9..1.6 — much more visible)
+                r_pt = 2.0 + 1.0 * env
                 p.drawEllipse(QPointF(cx + pt["x"], cy + pt["y"]), r_pt, r_pt)
 
-            # Faint contracting/expanding outer ring around the core dots
+            # Pulsing outer ring — big and eye-catching (r=42 + 12*sin, was 22 + 8*sin)
             ring_pulse = (math.sin(t * 3.2) + 1.0) / 2.0
-            outer_r = 22.0 + 8.0 * ring_pulse
+            outer_r = 42.0 + 12.0 * ring_pulse
             rc = QColor(col["hi"])
-            rc.setAlphaF(0.18 + 0.18 * (1.0 - ring_pulse))
-            pen_r = QPen(rc); pen_r.setWidthF(1.0)
+            rc.setAlphaF(0.30 + 0.25 * (1.0 - ring_pulse))
+            pen_r = QPen(rc); pen_r.setWidthF(2.0)
             p.setPen(pen_r); p.setBrush(Qt.NoBrush)
             p.drawEllipse(QPointF(cx, cy), outer_r, outer_r)
 

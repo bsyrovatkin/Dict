@@ -385,7 +385,9 @@ class VadStreamer:
                     audio = self._builder.get_pending_audio(last_s=self._preview_window_s)
                 except Exception:
                     log.exception("preview get_pending_audio failed")
-            if audio is None or audio.size < self._sample_rate // 2:  # < 0.5s
+            # Require at least 0.8s of pending audio — anything shorter is too
+            # little signal to be a useful preview and just causes UI flicker.
+            if audio is None or audio.size < int(self._sample_rate * 0.8):
                 continue
             try:
                 text = self._transcriber.transcribe(audio)

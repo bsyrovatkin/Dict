@@ -109,11 +109,12 @@ class _TranscriptBody(QTextEdit):
     """Read-only scrollable text body. Sticky-to-bottom: auto-scroll when
     user is at the bottom; preserve scroll position when they scrolled up.
 
-    Holds two pieces of text:
-      _committed_text : the committed chunks joined by spaces (white)
-      _preview_text   : the in-flight preview (dim italic, last line)
-    Both are rendered via setHtml() so we can style them differently.
+    Stores a list of chunks (each with a birth-time so we can fade the
+    fresh-chunk highlight) plus a single in-flight preview line.
+    Rendered via setHtml() so chunks at different ages get different colors.
     """
+    FRESH_MS = 380.0   # how long a freshly-committed chunk stays highlighted
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setReadOnly(True)
@@ -143,7 +144,8 @@ class _TranscriptBody(QTextEdit):
             }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
         """)
-        self._committed_text: str = ""
+        # Each chunk: {"text": str, "born_ms": float (monotonic*1000)}
+        self._chunks: list[dict] = []
         self._preview_text: str = ""
 
     @staticmethod
@@ -152,20 +154,49 @@ class _TranscriptBody(QTextEdit):
                  .replace("<", "&lt;")
                  .replace(">", "&gt;"))
 
+    @staticmethod
+    def _levenshtein_lite(a: str, b: str) -> int:
+        """Cheap edit-distance proxy: differing chars at aligned positions +
+        length diff. Used to skip preview repaints for tiny jitter."""
+        if not a or not b:
+            return abs(len(a) - len(b))
+        n = min(len(a), len(b))
+        diffs = sum(1 for i in range(n) if a[i] != b[i])
+        return diffs + abs(len(a) - len(b))
+
     def _render(self) -> None:
+        from time import monotonic
         bar = self.verticalScrollBar()
         was_at_bottom = (bar.value() >= bar.maximum() - 4)
-        committed_html = self._esc(self._committed_text)
+        now_ms = monotonic() * 1000.0
+        n = len(self._chunks)
+        parts: list[str] = []
+        for idx, ch in enumerate(self._chunks):
+            age = now_ms - ch["born_ms"]
+            is_fresh = age < self.FRESH_MS
+            from_end = n - 1 - idx
+            txt = self._esc(ch["text"])
+            if is_fresh:
+                # White on cyan-tinted background, mirrors design's fresh-chunk pop.
+                parts.append(
+                    f'<span style="background:rgba(123,228,255,0.22);'
+                    f' color:#ffffff; padding:0 3px;">{txt}</span>'
+                )
+            elif from_end < 3:
+                # Last 3 chunks: bright text
+                parts.append(f'<span style="color:{TEXT_HI.name()};">{txt}</span>')
+            else:
+                parts.append(f'<span style="color:{TEXT_MID.name()};">{txt}</span>')
+        committed_html = " ".join(parts)
+        preview_html = ""
         if self._preview_text:
             sep = " " if committed_html else ""
             preview_html = (
                 f"{sep}<span style='color:{TEXT_DIM.name()}; font-style: italic;'>"
                 f"… {self._esc(self._preview_text)}</span>"
             )
-        else:
-            preview_html = ""
         body = (
-            f"<div style='color:{TEXT_MID.name()};'>"
+            f"<div style='color:{TEXT_MID.name()}; line-height:1.65;'>"
             f"{committed_html}{preview_html}"
             f"</div>"
         )
@@ -174,25 +205,37 @@ class _TranscriptBody(QTextEdit):
             QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
 
     def append_chunk(self, text: str) -> None:
-        if self._committed_text:
-            self._committed_text = (self._committed_text + " " + text).strip()
-        else:
-            self._committed_text = text
+        from time import monotonic
+        text = (text or "").strip()
+        if not text:
+            return
+        self._chunks.append({"text": text, "born_ms": monotonic() * 1000.0})
         # A real commit invalidates any preview we might be showing.
         self._preview_text = ""
         self._render()
+        # Schedule a repaint at ~FRESH_MS + tiny buffer so the fresh-chunk
+        # highlight fades to TEXT_HI on time.
+        QTimer.singleShot(int(self.FRESH_MS) + 40, self._render)
 
     def set_preview(self, text: str) -> None:
-        self._preview_text = text or ""
+        text = text or ""
+        old = self._preview_text or ""
+        # Skip repaint if essentially unchanged — kills the "text shifts every
+        # 1.5s" flicker. Only repaint when the delta is meaningful.
+        if text == old:
+            return
+        if abs(len(text) - len(old)) < 3 and self._levenshtein_lite(text, old) < 3:
+            return
+        self._preview_text = text
         self._render()
 
     def clear_all(self) -> None:
-        self._committed_text = ""
+        self._chunks = []
         self._preview_text = ""
         self.setHtml("")
 
     def plain_committed(self) -> str:
-        return self._committed_text
+        return " ".join(ch["text"] for ch in self._chunks).strip()
 
 
 class TranscriptPanel(QWidget):

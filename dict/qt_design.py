@@ -78,13 +78,34 @@ FONT_MONO     = "JetBrains Mono"  # mono + tabular numerics
 def load_application_fonts(fonts_dir) -> None:
     """Register bundled TTF fonts so they're available everywhere via
     QFont('Rajdhani') / QFont('JetBrains Mono'). Idempotent — calling twice
-    is a no-op past the first registration."""
+    is a no-op past the first registration.
+
+    Logs each registered file + the resulting font families so that
+    dict-debug.log shows exactly what's loaded (and surfaces missing fonts
+    rather than silently falling back to a system default)."""
+    import logging
     from pathlib import Path
+    log = logging.getLogger("dict.fonts")
     fonts_path = Path(fonts_dir)
     if not fonts_path.exists():
+        log.warning("fonts dir does not exist: %s", fonts_path)
         return
+    loaded: list[tuple[str, list[str]]] = []
     for ttf in sorted(fonts_path.glob("*.ttf")):
-        QFontDatabase.addApplicationFont(str(ttf))
+        font_id = QFontDatabase.addApplicationFont(str(ttf))
+        if font_id < 0:
+            log.warning("failed to load font: %s", ttf.name)
+        else:
+            families = QFontDatabase.applicationFontFamilies(font_id)
+            loaded.append((ttf.name, list(families)))
+    log.info(
+        "loaded %d font files: %s",
+        len(loaded),
+        ", ".join(f"{n}->{','.join(fams)}" for n, fams in loaded),
+    )
+    all_families = QFontDatabase.families()
+    log.info("Rajdhani present: %s", FONT_RAJDHANI in all_families)
+    log.info("JetBrains Mono present: %s", FONT_MONO in all_families)
 
 
 # ---- Paint helpers (used by RecordWidget, TranscriptPanel, etc.) ----------
