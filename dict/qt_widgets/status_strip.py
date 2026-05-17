@@ -14,10 +14,45 @@ from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from dict.qt_design import (
-    LINE_DIM, TEXT_DIM, TEXT_HI, TEXT_MID,
+    ACCENT, LINE_DIM, TEXT_DIM, TEXT_HI, TEXT_MID,
     FONT_MONO, FONT_RAJDHANI,
     state_color,
 )
+
+
+class _GlowLabel(QLabel):
+    """QLabel that paints a soft halo behind the text in the same colour as
+    the text itself. Mirrors app.jsx::StatRow `textShadow: 0 0 8px ${color}55`
+    when highlight=true (state != idle)."""
+    def __init__(self, text: str = "") -> None:
+        super().__init__(text)
+        self._fg = TEXT_HI
+        self._glow = False
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+
+    def set_color(self, color: QColor, *, glow: bool) -> None:
+        self._fg = QColor(color)
+        self._glow = glow
+        self.setStyleSheet(f"color: {color.name()}; background: transparent;")
+        self.update()
+
+    def paintEvent(self, ev) -> None:
+        if self._glow:
+            p = QPainter(self)
+            p.setRenderHint(QPainter.Antialiasing, True)
+            # Two-pass faux glow: large soft halo + tighter inner halo.
+            r = self.rect()
+            from PySide6.QtGui import QRadialGradient, QBrush
+            cx, cy = r.width() / 2.0, r.height() / 2.0
+            radius = max(r.width(), r.height()) * 0.65
+            grad = QRadialGradient(cx, cy, radius)
+            halo = QColor(self._fg); halo.setAlpha(0x55)  # 0x55 ≈ 33% — matches CSS "color55"
+            inner = QColor(self._fg); inner.setAlpha(0x28)
+            grad.setColorAt(0.0, halo)
+            grad.setColorAt(0.45, inner)
+            grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.fillRect(r, QBrush(grad))
+        super().paintEvent(ev)
 
 
 class _LevelMeter(QWidget):
@@ -25,7 +60,8 @@ class _LevelMeter(QWidget):
     SEGMENTS = 28
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setFixedSize(124, 14)
+        # Design width is 140 (app.jsx LevelRow). Was 124 — bumped to match.
+        self.setFixedSize(140, 14)
         self._level = 0.0
         self._state = "idle"
         self._timer = QTimer(self)
@@ -73,12 +109,15 @@ class StatusStrip(QWidget):
         v.setSpacing(10)
 
         self._state_label_l = self._label_dim("STATE")
-        self._state_value = QLabel("IDLE")
-        # Large readout: Rajdhani Bold 12pt (compact: was 14), 0.22em tracking
-        font = QFont(FONT_RAJDHANI); font.setPointSize(12); font.setWeight(QFont.Bold)
+        # Use the glow-aware label so the value gets a state-tinted text-shadow
+        # (mirrors app.jsx::StatRow `textShadow: 0 0 8px ${color}55` when highlight).
+        self._state_value = _GlowLabel("IDLE")
+        # Large readout: Rajdhani Bold 18pt (design app.jsx: fontSize 20 for `big`).
+        # Was 12pt — too close to ELAPSED size and missing the design's hero-readout feel.
+        font = QFont(FONT_RAJDHANI); font.setPointSize(18); font.setWeight(QFont.Bold)
         font.setLetterSpacing(QFont.PercentageSpacing, 122)
         self._state_value.setFont(font)
-        self._state_value.setStyleSheet(f"color: {state_color('idle').name()};")
+        self._state_value.set_color(state_color('idle'), glow=False)
 
         self._elapsed_label_l = self._label_dim("ELAPSED")
         self._elapsed_value = QLabel("00:00.0")
@@ -99,23 +138,25 @@ class StatusStrip(QWidget):
         self._level_label_l = self._label_dim("LEVEL")
         self._level_meter = _LevelMeter()
 
-        # Two-column rows (label | value)
-        for lbl, val in [
-            (self._state_label_l, self._state_value),
-            (self._elapsed_label_l, self._elapsed_value),
-            (self._peak_label_l, self._peak_value),
-            (self._level_label_l, self._level_meter),
-        ]:
+        # Two-column rows. Divider pattern mirrors app.jsx:
+        #   STATE  ─── divider ───  ELAPSED  PEAK  ─── divider ───  LEVEL
+        # i.e. ONE divider after STATE, ONE divider between PEAK and LEVEL.
+        # No divider between ELAPSED and PEAK, no divider below LEVEL.
+        rows = [
+            (self._state_label_l, self._state_value, True),    # divider AFTER state
+            (self._elapsed_label_l, self._elapsed_value, False),
+            (self._peak_label_l, self._peak_value, True),      # divider AFTER peak
+            (self._level_label_l, self._level_meter, False),
+        ]
+        for lbl, val, add_div in rows:
             row = QHBoxLayout()
             row.setSpacing(10)
             lbl.setFixedWidth(56)
             row.addWidget(lbl, 0)
             row.addWidget(val, 1, Qt.AlignLeft | Qt.AlignVCenter)
             v.addLayout(row)
-            v.addWidget(self._divider())
-
-        # Drop the final divider
-        v.takeAt(v.count() - 1)
+            if add_div:
+                v.addWidget(self._divider())
 
     def _label_dim(self, text: str) -> QLabel:
         lbl = QLabel(text)
@@ -162,8 +203,33 @@ class StatusStrip(QWidget):
             self._t0 = None
             self._state_value.setText("IDLE")
         col = state_color(state)
-        self._state_value.setStyleSheet(f"color: {col.name()};")
+        # Glow on non-idle states (mirrors app.jsx `highlight={state !== 'idle'}`)
+        is_idle = state in ("idle", "ready", "loading")
+        self._state_value.set_color(col, glow=not is_idle)
+        # ELAPSED turns accent-cyan when actively recording (app.jsx::StatRow `active={state==='rec'}`)
+        if state in ("recording", "rec"):
+            self._elapsed_value.setStyleSheet(f"color: {ACCENT.name()};")
+        else:
+            self._elapsed_value.setStyleSheet(f"color: {TEXT_HI.name()};")
         self._level_meter.set_state(state)
+        self.update()  # repaint top-tinted background gradient
+
+    def paintEvent(self, ev) -> None:
+        """Subtle state-tinted gradient at the top of the strip (5% alpha,
+        fades to transparent at the bottom). Mirrors app.jsx wrapper
+        `background: linear-gradient(180deg, color-mix(in oklab, ${stateColor} 5%, transparent) 0%, transparent 100%)`.
+        Painted as a wide top halo, no harsh edge."""
+        from PySide6.QtGui import QLinearGradient, QBrush
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, False)
+        r = self.rect()
+        col = state_color(self._state)
+        tint = QColor(col); tint.setAlpha(int(0.06 * 255))
+        grad = QLinearGradient(0, 0, 0, r.height())
+        grad.setColorAt(0.0, tint)
+        grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(r, QBrush(grad))
+        super().paintEvent(ev)
 
     def set_level(self, level: float) -> None:
         self._level_meter.set_level(level)

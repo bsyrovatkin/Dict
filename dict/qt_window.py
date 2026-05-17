@@ -1287,14 +1287,38 @@ class _HeaderWidget(QWidget):
         h.addWidget(self.close_btn)
 
     def _paint_gear_icon(self, btn: QPushButton) -> None:
-        """Try to set gear PNG icon; fall back to unicode ⚙."""
+        """Render the design's gear vector (circle r=2.2 + 8 radial ticks) at
+        2x scale into a QPixmap using TEXT_MID. Mirrors header.jsx::WinBtn
+        SVG so all three window-control glyphs (—, ✕, gear) share the same
+        stroke colour and weight, matching the design comp."""
         try:
-            from dict import config as _cfg
-            gear_png = _cfg.ASSETS_DIR / "icon_gear@2x.png"
-            if gear_png.exists():
-                btn.setIcon(QIcon(str(gear_png)))
-                btn.setIconSize(QSize(14, 14))
-                return
+            from dict.qt_design import TEXT_MID
+            from PySide6.QtGui import QPixmap
+            size = 14
+            scale = 2  # render @2x for crisp downscale
+            pm = QPixmap(size * scale, size * scale)
+            pm.fill(Qt.transparent)
+            p = QPainter(pm)
+            p.setRenderHint(QPainter.Antialiasing, True)
+            pen = QPen(TEXT_MID)
+            pen.setWidthF(1.2 * scale)
+            pen.setCapStyle(Qt.RoundCap)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            # Inner circle r=2.2 at center (cx=cy=7 in 14px viewbox)
+            cx = cy = 7.0 * scale
+            p.drawEllipse(QPointF(cx, cy), 2.2 * scale, 2.2 * scale)
+            # 8 radial ticks from r=5.5 to r=3.8 (length 1.7), every 45°
+            for a_deg in (0, 45, 90, 135, 180, 225, 270, 315):
+                a = math.radians(a_deg)
+                dx, dy = math.sin(a), -math.cos(a)  # 0° = up
+                x1, y1 = cx + dx * 5.5 * scale, cy + dy * 5.5 * scale
+                x2, y2 = cx + dx * 3.8 * scale, cy + dy * 3.8 * scale
+                p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+            p.end()
+            btn.setIcon(QIcon(pm))
+            btn.setIconSize(QSize(size, size))
+            return
         except Exception:
             pass
         btn.setText("⚙")
@@ -1392,7 +1416,7 @@ class _PanelWidget(QWidget):
         )
 
     def paintEvent(self, ev) -> None:
-        from PySide6.QtGui import QPainter
+        from PySide6.QtGui import QPainter, QLinearGradient, QBrush
         from dict.qt_design import paint_corner_brackets, SURFACE_1
         p_fill = QPainter(self)
         p_fill.fillRect(self.rect(), SURFACE_1)
@@ -1400,9 +1424,37 @@ class _PanelWidget(QWidget):
         super().paintEvent(ev)
 
         lerped = self._lerped_state_color()
+        r = self.rect()
+
+        # State-tinted edge halo: four soft gradients fading inward from each
+        # edge to transparent. Mirrors the design's `boxShadow 0 0 70px ${col}33`
+        # outer glow — since our frameless window can't paint outside its own
+        # rect, we fake it by painting an INWARD halo at the panel perimeter.
+        halo = QPainter(self)
+        halo.setRenderHint(QPainter.Antialiasing, False)
+        depth = 14
+        tint = QColor(lerped); tint.setAlpha(int(0.20 * 255))
+        clear = QColor(0, 0, 0, 0)
+        # Top
+        g_top = QLinearGradient(0, 0, 0, depth)
+        g_top.setColorAt(0.0, tint); g_top.setColorAt(1.0, clear)
+        halo.fillRect(0, 0, r.width(), depth, QBrush(g_top))
+        # Bottom
+        g_bot = QLinearGradient(0, r.height() - depth, 0, r.height())
+        g_bot.setColorAt(0.0, clear); g_bot.setColorAt(1.0, tint)
+        halo.fillRect(0, r.height() - depth, r.width(), depth, QBrush(g_bot))
+        # Left
+        g_left = QLinearGradient(0, 0, depth, 0)
+        g_left.setColorAt(0.0, tint); g_left.setColorAt(1.0, clear)
+        halo.fillRect(0, 0, depth, r.height(), QBrush(g_left))
+        # Right
+        g_right = QLinearGradient(r.width() - depth, 0, r.width(), 0)
+        g_right.setColorAt(0.0, clear); g_right.setColorAt(1.0, tint)
+        halo.fillRect(r.width() - depth, 0, depth, r.height(), QBrush(g_right))
+        halo.end()
 
         # State-tinted inner border
-        glow = QColor(lerped); glow.setAlpha(80)
+        glow = QColor(lerped); glow.setAlpha(110)  # was 80 — slightly brighter
         pen = QPen(glow); pen.setWidthF(1.5)
         p_brd = QPainter(self)
         p_brd.setRenderHint(QPainter.Antialiasing, True)

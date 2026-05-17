@@ -138,14 +138,16 @@ class _TranscriptBody(QTextEdit):
             }}
             QScrollBar:vertical {{
                 background: transparent;
-                width: 8px;
+                width: 6px;       /* design uses 6px (header css) for the body */
+                margin: 0;
             }}
             QScrollBar::handle:vertical {{
-                background: rgba(138,149,172,90);
+                background: rgba(138,149,172,64);   /* dimmer than the old 90 */
                 min-height: 24px;
+                border-radius: 0;
             }}
             QScrollBar::handle:vertical:hover {{
-                background: rgba(138,149,172,140);
+                background: rgba(138,149,172,110);
             }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
         """)
@@ -308,10 +310,14 @@ class TranscriptPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+        # Border alpha 0.28 (vs design 0.18) — Windows monitors need a hair
+        # more contrast to read as "complete border" instead of "subtle edge".
+        # Matches the user's "у него рамка полностью" feedback.
+        border_col = QColor(138, 149, 172, int(0.28 * 255)).name(QColor.HexArgb)
         self.setStyleSheet(f"""
             QWidget#transcriptFrame {{
                 background-color: {SURFACE_2.name()};
-                border: 1px solid {LINE_MID.name(QColor.HexArgb)};
+                border: 1px solid {border_col};
             }}
         """)
         frame = QWidget()
