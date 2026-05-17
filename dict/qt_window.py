@@ -1117,13 +1117,15 @@ class _StatusPill(QWidget):
 
 
 class _WaveStrip(QWidget):
-    """Mini 120×22 animated waveform strip in the header.
-    36 bars; the last 6 are state-colored, the rest are dim grey."""
-    BARS = 36
+    """Mini 60×22 animated waveform strip in the header (compact).
+    18 bars; the last 4 are state-colored, the rest are dim grey.
+    Width was 120 — shrunk so the header fits in the 500px compact window
+    without the waves running over the brand mark."""
+    BARS = 18
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setFixedSize(120, 22)
+        self.setFixedSize(60, 22)
         self._state = "idle"
         self._phase = 0.0
         self._timer = QTimer(self)
@@ -1157,7 +1159,7 @@ class _WaveStrip(QWidget):
             bh = max(1, int(env * (h - 4)))
             x = i * (bar_w + 1)
             y = (h - bh) // 2
-            c = col if i >= self.BARS - 6 else dim
+            c = col if i >= self.BARS - 4 else dim
             p.fillRect(x, y, bar_w, bh, c)
 
 
@@ -1217,12 +1219,14 @@ class _HeaderWidget(QWidget):
         self._status_pill = _StatusPill()
         h.addWidget(self._status_pill)
 
-        # --- Mini waveform strip ---
-        self._wave = _WaveStrip()
-        h.addWidget(self._wave, 1, Qt.AlignVCenter)
+        # --- Elastic gap pushes wave + window controls to the right edge,
+        # so the brand mark / hotkey slab / status pill cluster on the left
+        # and the wave strip never runs over them on narrow widths. ---
+        h.addStretch(1)
 
-        # --- Stretch ---
-        h.addStretch(0)
+        # --- Mini waveform strip (60×22, right-anchored) ---
+        self._wave = _WaveStrip()
+        h.addWidget(self._wave, 0, Qt.AlignVCenter)
 
         # --- Window control buttons ---
         btn_style_base = (
