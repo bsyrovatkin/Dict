@@ -904,12 +904,21 @@ class _StatusPill(QWidget):
         f = QFont(FONT_RAJDHANI)
         f.setPointSize(8)  # was 7 — design min 8pt for Rajdhani labels
         f.setWeight(QFont.DemiBold)
+        # Account for 22% letter-spacing applied in paintEvent (QFontMetrics
+        # returns width without the spacing, so the rendered string is ~22%
+        # wider than fm.horizontalAdvance suggests).
+        f.setLetterSpacing(QFont.PercentageSpacing, 122)
         from PySide6.QtGui import QFontMetrics
         fm = QFontMetrics(f)
         max_label = "DECODING"
-        w = 8 + 8 + 6 + fm.horizontalAdvance(max_label) + 10 + 8  # marker + gap + text + pad
+        text_w = fm.horizontalAdvance(max_label)
+        # Layout: 8 left pad + 8 marker + 6 gap + text + 12 right pad (+ 8 cut)
+        w = 8 + 8 + 6 + text_w + 12 + 8
         h = max(24, fm.height() + 8)
         return QSize(w, h)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
 
     def paintEvent(self, _ev) -> None:
         from dict.qt_design import state_color, FONT_RAJDHANI
