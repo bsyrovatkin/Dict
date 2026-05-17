@@ -119,12 +119,12 @@ class Controller:
 
     def handle_partial(self, text: str) -> None:
         """Route a freshly-committed VAD chunk: append to the HUD transcript
-        AND (if auto-paste is on) immediately paste it into the focused field
-        so the user sees text streaming in live as they speak.
+        AND (if auto-paste is on) type it character-by-character into the
+        focused field so the user sees text streaming in live as they speak.
 
         Called from the streamer's tx_thread. Safe to call across threads —
-        window.append_partial uses a queued signal; paste_text uses its own
-        timer for clipboard restore.
+        window.append_partial uses a queued signal; type_text uses keyboard
+        SendInput on its own.
         """
         try:
             self._window.append_partial(text)
@@ -132,19 +132,31 @@ class Controller:
             log.exception("window.append_partial raised")
         if not self._auto_paste:
             return
-        # Only stream-paste during RECORDING or TRANSCRIBING (the tail flushed
-        # during stop also counts). Don't paste in IDLE — would surprise the
+        # Only stream-type during RECORDING or TRANSCRIBING (the tail flushed
+        # during stop also counts). Don't type in IDLE — would surprise the
         # user and likely land in the wrong app.
         with self._state_lock:
             current = self._state
         if current is State.IDLE:
             return
+        # Lazy import — keeps controller decoupled from paste module's deps
+        # at unit-test time (tests stub MagicMock for self._paste).
+        from dict import paste as _paste_mod
+        from dict import config as _cfg
+
+        # Separator: prepend a space before every chunk except the first one
+        # in this session, so "hello" + "world" → "hello world".
+        payload = (" " + text) if self._session_streamed else text
         try:
-            ok = self._paste(text, self._get_current_hotkey())
+            ok = _paste_mod.type_text(
+                payload,
+                current_hotkey=self._get_current_hotkey(),
+                delay_s=_cfg.STREAM_TYPE_DELAY_S,
+            )
             self._session_streamed = True
-            log.info("stream-paste chunk (%d chars) ok=%s", len(text), ok)
+            log.info("stream-type chunk (%d chars) ok=%s", len(payload), ok)
         except Exception:
-            log.exception("stream-paste failed for chunk; text in clipboard")
+            log.exception("stream-type failed for chunk")
 
     def _start_recording(self) -> None:
         if not getattr(self._transcriber, "is_loaded", True):

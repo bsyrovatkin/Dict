@@ -113,7 +113,8 @@ class _TranscriptBody(QTextEdit):
     fresh-chunk highlight) plus a single in-flight preview line.
     Rendered via setHtml() so chunks at different ages get different colors.
     """
-    FRESH_MS = 380.0   # how long a freshly-committed chunk stays highlighted
+    FRESH_MS = 900.0   # how long a freshly-committed chunk stays highlighted
+    FADE_MS = 600.0    # additional fade-out window after FRESH_MS expires
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -171,19 +172,40 @@ class _TranscriptBody(QTextEdit):
         now_ms = monotonic() * 1000.0
         n = len(self._chunks)
         parts: list[str] = []
+        any_animating = False
         for idx, ch in enumerate(self._chunks):
             age = now_ms - ch["born_ms"]
-            is_fresh = age < self.FRESH_MS
             from_end = n - 1 - idx
             txt = self._esc(ch["text"])
-            if is_fresh:
-                # White on cyan-tinted background, mirrors design's fresh-chunk pop.
+            # Smooth 3-stage fade:
+            #   0 .. FRESH_MS         : full highlight (white on tint)
+            #   FRESH_MS .. +FADE_MS  : interpolated tint alpha → 0, text white → text_hi
+            #   else                  : settled colour (text_hi for last 3, text_mid older)
+            if age < self.FRESH_MS:
+                # Eased ramp during the first 200ms so the highlight feels
+                # like it "arrives" rather than popping in.
+                ramp = min(1.0, age / 200.0)
+                tint_alpha = 0.22 * (0.4 + 0.6 * ramp)
                 parts.append(
-                    f'<span style="background:rgba(123,228,255,0.22);'
+                    f'<span style="background:rgba(123,228,255,{tint_alpha:.3f});'
                     f' color:#ffffff; padding:0 3px;">{txt}</span>'
                 )
+                any_animating = True
+            elif age < self.FRESH_MS + self.FADE_MS:
+                # Linear fade-out of the tint
+                k = (age - self.FRESH_MS) / self.FADE_MS  # 0..1
+                tint_alpha = 0.22 * (1.0 - k)
+                # Lerp text color white → TEXT_HI
+                hi_r, hi_g, hi_b = TEXT_HI.red(), TEXT_HI.green(), TEXT_HI.blue()
+                tr = int(255 * (1 - k) + hi_r * k)
+                tg = int(255 * (1 - k) + hi_g * k)
+                tb = int(255 * (1 - k) + hi_b * k)
+                parts.append(
+                    f'<span style="background:rgba(123,228,255,{tint_alpha:.3f});'
+                    f' color:rgb({tr},{tg},{tb}); padding:0 3px;">{txt}</span>'
+                )
+                any_animating = True
             elif from_end < 3:
-                # Last 3 chunks: bright text
                 parts.append(f'<span style="color:{TEXT_HI.name()};">{txt}</span>')
             else:
                 parts.append(f'<span style="color:{TEXT_MID.name()};">{txt}</span>')
@@ -213,9 +235,12 @@ class _TranscriptBody(QTextEdit):
         # A real commit invalidates any preview we might be showing.
         self._preview_text = ""
         self._render()
-        # Schedule a repaint at ~FRESH_MS + tiny buffer so the fresh-chunk
-        # highlight fades to TEXT_HI on time.
-        QTimer.singleShot(int(self.FRESH_MS) + 40, self._render)
+        # Drive the fade animation: repaint every 60ms for the full
+        # FRESH_MS + FADE_MS window so the alpha+color interpolation looks
+        # smooth instead of a single jump.
+        total_ms = int(self.FRESH_MS + self.FADE_MS) + 80
+        for delay in range(60, total_ms, 60):
+            QTimer.singleShot(delay, self._render)
 
     def set_preview(self, text: str) -> None:
         text = text or ""

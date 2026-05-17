@@ -46,9 +46,13 @@ AUTO_PASTE = True            # send Ctrl+V into the focused field after transcri
 # phrase context and produced garbage like "1, 2, 3, 4" or missing letters
 # ("Аплитуда" instead of "Амплитуда"). Whisper needs ~5–10s windows for its
 # best output; we still cap so the UI commits within a few seconds.
-STREAM_PAUSE_MS = 400        # silence duration that commits a segment
-STREAM_HARD_CAP_S = 6.0      # max speech-only seconds in a segment before forced commit
-STREAM_HARD_CAP_ELAPSED_S = 5.0  # wall-clock cap including inter-phrase pauses
+STREAM_PAUSE_MS = 500        # silence that commits a segment (longer = bigger chunks)
+STREAM_HARD_CAP_S = 8.0      # max speech-only seconds in a segment before forced commit
+STREAM_HARD_CAP_ELAPSED_S = 7.0  # wall-clock cap (chunks arrive ~every 5-7s)
+
+# Streaming-paste typewriter cadence — chunks are typed character-by-character
+# into the focused field. 0.018s/char × ~50 chars ≈ ~1s per chunk.
+STREAM_TYPE_DELAY_S = 0.018
 
 # Real-time preview transcription (sliding window on uncommitted audio).
 # A dedicated PreviewTranscriber (tiny model, see preview_transcriber.py) runs

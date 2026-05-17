@@ -59,3 +59,36 @@ def paste_text(
     timer.daemon = True
     timer.start()
     return True
+
+
+def type_text(
+    text: str,
+    current_hotkey: str | None = None,
+    delay_s: float = 0.018,
+) -> bool:
+    """Type `text` character-by-character into the focused field via SendInput
+    Unicode events. Slower than Ctrl+V paste, but gives a "typewriter" feel
+    perfect for streaming live chunks. Does NOT touch the clipboard.
+
+    `delay_s` is the pause between keystrokes — 0.018s × ~50 chars ≈ ~1 second
+    per chunk, matching the user's "тык-тык-тык" target cadence.
+
+    Returns True if the typing call returned without raising; False otherwise.
+    """
+    if not text:
+        return True
+
+    if current_hotkey:
+        try:
+            keyboard.release(current_hotkey)
+        except Exception:
+            log.warning("type_text: keyboard.release(%r) failed (continuing)",
+                        current_hotkey)
+
+    try:
+        # keyboard.write uses SendInput Unicode mode — handles Cyrillic fine.
+        keyboard.write(text, delay=delay_s)
+        return True
+    except Exception:
+        log.warning("type_text: keyboard.write failed for %d chars", len(text))
+        return False
