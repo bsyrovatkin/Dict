@@ -1285,10 +1285,11 @@ class MainWindow(QWidget):
         self._drag_pos: QPoint | None = None
 
         self.setObjectName("mainWindow")
+        # Topmost is toggled at runtime by the controller (REC = on, IDLE = off).
+        # Constructor stays NOT topmost so the app boots in the background.
         self.setWindowFlags(
             Qt.FramelessWindowHint
             | Qt.Tool
-            | Qt.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setMinimumSize(560, 680)
@@ -1506,41 +1507,56 @@ class MainWindow(QWidget):
         self.always_on_top_signal.emit(bool(on))
 
     def _apply_always_on_top(self, on: bool) -> None:
-        """Toggle the topmost flag at runtime WITHOUT flicker.
+        """Toggle topmost via Win32 SetWindowPos AND keep Qt's window-flags
+        view in sync so Qt doesn't re-apply the old value on the next paint.
 
-        Qt's `setWindowFlag(WindowStaysOnTopHint, ...)` requires hiding the
-        window briefly, which causes a visible flash. On Windows we go
-        straight through Win32 SetWindowPos(HWND_TOPMOST/HWND_NOTOPMOST)
-        which flips the WS_EX_TOPMOST style without re-rendering anything.
+        On Windows:
+          - HWND_TOPMOST  / HWND_NOTOPMOST flips WS_EX_TOPMOST instantly
+          - HWND_TOP      raises the window above non-topmost peers
+          - HWND_BOTTOM   pushes the window to the back so other apps cover it
+        All with SWP_NOACTIVATE so we never steal focus.
 
-        When releasing topmost, we additionally lower() the window so it
-        actually goes BEHIND any other apps the user might want to use —
-        otherwise it would just sit on top with normal z-order, still
-        covering whatever's underneath at that moment.
+        We also call setWindowFlag(StaysOnTop) so Qt's understanding of the
+        window state matches reality — without this, Qt may reset the
+        topmost state on the next show/paint and the user sees the window
+        bouncing back to top.
         """
         try:
             import ctypes
             HWND_TOPMOST    = -1
             HWND_NOTOPMOST  = -2
+            HWND_TOP        =  0
             HWND_BOTTOM     =  1
             SWP_NOSIZE      = 0x0001
             SWP_NOMOVE      = 0x0002
             SWP_NOACTIVATE  = 0x0010
             flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
             hwnd = int(self.winId())
-            target = HWND_TOPMOST if on else HWND_NOTOPMOST
-            ctypes.windll.user32.SetWindowPos(hwnd, target, 0, 0, 0, 0, flags)
-            if not on:
-                # Push to back so other windows can actually cover us
-                ctypes.windll.user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, flags)
+            user32 = ctypes.windll.user32
+            if on:
+                # Pin topmost — covers all non-topmost windows
+                user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+                # Also raise above other topmost peers (rare but possible)
+                user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags)
+            else:
+                # Clear topmost
+                user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags)
+                # Push to back of normal z-order so any other window covers us
+                user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, flags)
         except Exception:
-            # Cross-platform fallback (with flicker — Qt's flag toggle)
+            log.exception("SetWindowPos failed (continuing with Qt fallback)")
+
+        # Sync Qt's internal flag state without triggering a hide/show flash.
+        # We use setWindowFlag but DO NOT call show() afterwards — Qt's next
+        # natural repaint picks up the new flag. The visible state on screen
+        # is already what we want thanks to the Win32 call above.
+        try:
             current = bool(self.windowFlags() & Qt.WindowStaysOnTopHint)
-            if current == bool(on):
-                return
-            was_visible = self.isVisible()
-            self.setWindowFlag(Qt.WindowStaysOnTopHint, bool(on))
-            if was_visible:
-                self.show()
-            if not on:
-                self.lower()
+            if current != bool(on):
+                # Save state because setWindowFlag may hide; we want it shown.
+                self.setWindowFlag(Qt.WindowStaysOnTopHint, bool(on))
+                if not self.isVisible():
+                    # Restore visibility without focus or activation.
+                    self.show()
+        except Exception:
+            log.exception("Qt flag sync failed")
