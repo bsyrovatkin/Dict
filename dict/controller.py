@@ -95,6 +95,10 @@ class Controller:
         self._auto_show_seconds = auto_show_seconds
         self._state = State.IDLE
         self._state_lock = threading.Lock()
+        # Tracks whether we've already streamed-pasted any chunks during the
+        # current session. When True, the final stop-worker skips the bulk
+        # paste so we don't double-paste what was already typed live.
+        self._session_streamed = False
 
     @property
     def state(self) -> State:
@@ -113,6 +117,35 @@ class Controller:
         else:
             log.info("hotkey ignored - currently transcribing")
 
+    def handle_partial(self, text: str) -> None:
+        """Route a freshly-committed VAD chunk: append to the HUD transcript
+        AND (if auto-paste is on) immediately paste it into the focused field
+        so the user sees text streaming in live as they speak.
+
+        Called from the streamer's tx_thread. Safe to call across threads —
+        window.append_partial uses a queued signal; paste_text uses its own
+        timer for clipboard restore.
+        """
+        try:
+            self._window.append_partial(text)
+        except Exception:
+            log.exception("window.append_partial raised")
+        if not self._auto_paste:
+            return
+        # Only stream-paste during RECORDING or TRANSCRIBING (the tail flushed
+        # during stop also counts). Don't paste in IDLE — would surprise the
+        # user and likely land in the wrong app.
+        with self._state_lock:
+            current = self._state
+        if current is State.IDLE:
+            return
+        try:
+            ok = self._paste(text, self._get_current_hotkey())
+            self._session_streamed = True
+            log.info("stream-paste chunk (%d chars) ok=%s", len(text), ok)
+        except Exception:
+            log.exception("stream-paste failed for chunk; text in clipboard")
+
     def _start_recording(self) -> None:
         if not getattr(self._transcriber, "is_loaded", True):
             log.info("hotkey while model still loading — ignoring")
@@ -120,6 +153,8 @@ class Controller:
             self._window.set_state("loading")
             self._tray.notify("Dict", "Model still loading — try again in a moment")
             return
+        # Reset stream-paste tracker for the new session
+        self._session_streamed = False
         # Clear the prior session's transcript so it doesn't bleed into this one.
         # (We intentionally do NOT clear at the end of the previous session —
         # the user wants the last result to persist until the next recording.)
@@ -190,10 +225,16 @@ class Controller:
                 # session's _start_recording() will clear it.
                 self._return_to_idle()
                 return
-            log.info("delivering %d chars", len(text))
+            log.info("delivering %d chars (streamed=%s)", len(text), self._session_streamed)
             self._history.push(text)
             self._logger_append(text)
-            if self._auto_paste:
+            if self._session_streamed:
+                # Chunks were already typed live into the focused field via
+                # handle_partial. Skip the bulk paste so we don't duplicate
+                # everything. The clipboard still holds the last pasted chunk;
+                # we leave it as-is.
+                log.info("skipping bulk paste — text already streamed live")
+            elif self._auto_paste:
                 try:
                     ok = self._paste(text, self._get_current_hotkey())
                     log.info("auto-paste sent ok=%s", ok)

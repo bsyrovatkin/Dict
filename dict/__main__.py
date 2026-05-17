@@ -234,9 +234,16 @@ def main() -> int:
         window_holder: dict[str, MainWindow] = {}
 
         def _on_partial(text: str) -> None:
-            w = window_holder.get("w")
-            if w is not None:
-                w.append_partial(text)
+            # Route through controller so it can both append to HUD AND
+            # stream-paste each chunk into the focused field as it commits.
+            c = controller_holder.get("c")
+            if c is not None:
+                c.handle_partial(text)
+            else:
+                # Pre-controller construction: just append to window if any.
+                w = window_holder.get("w")
+                if w is not None:
+                    w.append_partial(text)
 
         def _on_preview(text: str) -> None:
             w = window_holder.get("w")
