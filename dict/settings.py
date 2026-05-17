@@ -5,6 +5,7 @@ Fields that don't exist in the file fall back to `config.py` defaults.
 from __future__ import annotations
 
 import json
+import sys as _sys
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
@@ -13,7 +14,12 @@ from dict.utils_logging import get_logger
 
 log = get_logger(__name__)
 
-SETTINGS_PATH = Path.home() / "AppData" / "Roaming" / "dict" / "settings.json"
+if _sys.platform == "win32":
+    SETTINGS_PATH = Path.home() / "AppData" / "Roaming" / "dict" / "settings.json"
+elif _sys.platform == "darwin":
+    SETTINGS_PATH = Path.home() / "Library" / "Application Support" / "dict" / "settings.json"
+else:
+    SETTINGS_PATH = Path.home() / ".config" / "dict" / "settings.json"
 
 
 @dataclass

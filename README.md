@@ -4,7 +4,7 @@
   <img src="assets/icon_idle.png" width="160" alt="Dict icon">
 </p>
 
-**Jarvis-style voice-to-clipboard transcriber for Windows.**
+**Jarvis-style voice-to-clipboard transcriber for Windows and macOS.**
 Press `F9` (or your bound hotkey), speak, press again — Russian/English speech
 is transcribed locally via Whisper and lands in your clipboard. A small
 history window shows the last five transcriptions with one-click copy.
@@ -60,6 +60,23 @@ pyinstaller dict.spec
 
 Output: `dist\dict\dict.exe` (one-dir, ~330 MB with all runtimes).
 
+## Build for macOS (run ON a Mac)
+
+```bash
+git clone https://github.com/bsyrovatkin/Dict.git && cd Dict
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]" pyinstaller
+pyinstaller dict-mac.spec
+# Output: dist/Dict.app
+```
+
+**First-run permissions** (macOS only):
+1. Launch `Dict.app` once — you'll be prompted for Microphone access (allow).
+2. Open **System Settings → Privacy & Security → Accessibility**, click `+`, add `Dict.app`. This lets the global hotkey work and lets Dict type into the focused field.
+3. Restart Dict.app.
+
+On Apple Silicon (M1/M2/M3) Whisper runs on CPU via ctranslate2 (no Metal/CoreML support yet); a `small` model transcribes ~3s audio in ~1-2s.
+
 ## Troubleshooting
 
 - **No input device / silent recording:** in Windows `Settings → Privacy →
@@ -87,7 +104,7 @@ Output: `dist\dict\dict.exe` (one-dir, ~330 MB with all runtimes).
 - **UI:** PySide6 (Qt 6.6), frameless window, QPainter for the HUD widget.
 - **STT:** faster-whisper (ctranslate2).
 - **Audio:** sounddevice (PortAudio).
-- **Hotkey:** keyboard library (low-level Windows hook).
+- **Hotkey:** pynput (cross-platform: low-level Windows hook on Win, CGEventTap on macOS).
 - **Build:** PyInstaller one-dir.
 
 ## License

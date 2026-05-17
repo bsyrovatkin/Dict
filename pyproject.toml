@@ -1,13 +1,13 @@
 [project]
 name = "dict"
-version = "0.1.0"
-description = "Tray-resident voice-to-clipboard transcriber for Windows"
+version = "0.2.0"
+description = "Tray-resident voice-to-clipboard transcriber (Windows + macOS)"
 requires-python = ">=3.10"
 dependencies = [
   "faster-whisper>=1.0.3",
   "sounddevice>=0.4.6",
   "numpy>=1.26,<2.3",
-  "keyboard>=0.13.5",
+  "pynput>=1.7",
   "PySide6>=6.6",
   "pyperclip>=1.9.0",
 ]

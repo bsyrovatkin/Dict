@@ -6,8 +6,6 @@ import sys
 import threading
 from pathlib import Path
 
-import msvcrt
-
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
@@ -61,6 +59,9 @@ def _configure_logging() -> None:
 
 
 class _SingleInstanceLock:
+    """Cross-platform exclusive file lock. Windows uses msvcrt.locking,
+    Unix uses fcntl.flock. The lock file lives at `path` and is held until
+    release() or process exit."""
     def __init__(self, path: Path) -> None:
         self._path = path
         self._file = None
@@ -69,22 +70,40 @@ class _SingleInstanceLock:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         try:
             self._file = open(self._path, "a+")
-            msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
-            return True
         except OSError:
-            if self._file is not None:
+            return False
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except (OSError, BlockingIOError):
+            try:
                 self._file.close()
-                self._file = None
+            except Exception:
+                pass
+            self._file = None
             return False
 
     def release(self) -> None:
         if self._file is None:
             return
         try:
-            msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
+            if sys.platform == "win32":
+                import msvcrt
+                msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
         except OSError:
             pass
-        self._file.close()
+        try:
+            self._file.close()
+        except Exception:
+            pass
         self._file = None
 
 
@@ -124,7 +143,7 @@ def _selftest() -> int:
     log.info("sys.path[0]=%s", sys.path[0] if sys.path else "?")
 
     # Step 1: import check — imports that PyInstaller sometimes misses.
-    for mod_name in ("numpy", "sounddevice", "keyboard", "PySide6",
+    for mod_name in ("numpy", "sounddevice", "pynput", "PySide6",
                      "ctranslate2", "tokenizers", "onnxruntime",
                      "faster_whisper", "av"):
         try:

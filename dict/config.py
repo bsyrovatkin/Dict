@@ -5,6 +5,7 @@ of the codebase never hard-codes magic numbers.
 """
 from __future__ import annotations
 
+import tempfile as _tmp
 from pathlib import Path
 
 # Paths (resolved relative to the package directory)
@@ -12,7 +13,7 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = PACKAGE_DIR.parent
 ASSETS_DIR = PROJECT_DIR / "assets"
 LOG_PATH = PROJECT_DIR / "dict.log"
-LOCK_PATH = Path.home() / "AppData" / "Local" / "Temp" / "dict.lock"
+LOCK_PATH = Path(_tmp.gettempdir()) / "dict.lock"
 
 # Audio
 SAMPLE_RATE = 16000        # Hz; Whisper is trained on 16 kHz

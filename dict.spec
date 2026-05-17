@@ -42,8 +42,9 @@ a = Analysis(  # noqa: F821
         "tokenizers",
         "onnxruntime",
         "onnxruntime.capi._pybind_state",
-        # keyboard library registers handlers dynamically
-        "keyboard._winkeyboard",
+        # pynput registers platform-specific backends dynamically
+        "pynput",
+        "pynput.keyboard._win32",
     ],
     hookspath=[],
     hooksconfig={},

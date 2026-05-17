@@ -1,104 +1,100 @@
-"""Global hotkey listener.
+"""Global hotkey listener. Cross-platform via pynput.
 
-Uses the `keyboard` library, which installs a low-level Windows keyboard
-hook (SetWindowsHookEx WH_KEYBOARD_LL). This is more robust than
-pynput's GlobalHotKeys, which in practice stops firing after the first
-trigger on Windows 11.
-
-Hotkey format is the `keyboard` library syntax: "f9", "ctrl+shift+v",
-"ctrl+alt+space". We translate our pynput-style config (`<f9>`,
-`<ctrl>+<shift>+v`) transparently.
+On macOS the user must grant Accessibility permission to the Python
+interpreter (or to the bundled .app) in System Settings -> Privacy &
+Security -> Accessibility, otherwise no key events are received.
 """
 from __future__ import annotations
 
-import re
 from typing import Callable
-
-import keyboard as kb  # type: ignore[import]
 
 from dict.utils_logging import get_logger
 
 log = get_logger(__name__)
 
 
-# ЙЦУКЕН -> QWERTY mapping. `keyboard` library only recognises Latin
-# key names, so if the user rebinds while in Russian layout we map the
-# captured Cyrillic letter back to the physical QWERTY key underneath.
-_CYR_TO_LAT = {
-    "й": "q", "ц": "w", "у": "e", "к": "r", "е": "t", "н": "y",
-    "г": "u", "ш": "i", "щ": "o", "з": "p", "х": "[", "ъ": "]",
-    "ф": "a", "ы": "s", "в": "d", "а": "f", "п": "g", "р": "h",
-    "о": "j", "л": "k", "д": "l", "ж": ";", "э": "'",
-    "я": "z", "ч": "x", "с": "c", "м": "v", "и": "b", "т": "n",
-    "ь": "m", "б": ",", "ю": ".", "ё": "`",
-}
-
-
-def _latinise_key(key: str) -> str:
-    """Replace a single Cyrillic letter with its QWERTY counterpart.
-    Non-Cyrillic input is returned unchanged."""
-    if len(key) == 1 and key.lower() in _CYR_TO_LAT:
-        return _CYR_TO_LAT[key.lower()]
-    return key
+def is_valid_combo(combo: str) -> bool:
+    """Cheap parse-only validity check for a hotkey combo string."""
+    if not combo or not combo.strip():
+        return False
+    # pynput accepts "<f9>", "<ctrl>+v", "pause", etc. Allow simple keys
+    # and modifier combos with +.
+    parts = [p.strip() for p in combo.split("+")]
+    return all(parts) and all(len(p) > 0 for p in parts)
 
 
 def normalize_combo(combo: str) -> str:
-    """Convert pynput-style `<ctrl>+<shift>+v` and Cyrillic-captured keys
-    into a `keyboard` library combo: lowercase, no brackets, QWERTY only.
-    """
-    cleaned = re.sub(r"[<>]", "", combo).lower().strip()
-    parts = [_latinise_key(p.strip()) for p in cleaned.split("+") if p.strip()]
+    """Latinise + lowercase a combo string. Maps Cyrillic chars that share
+    a QWERTY position to their Latin equivalents (so Russian-layout users
+    can press the same physical keys)."""
+    cyr_to_lat = str.maketrans(
+        "йцукенгшщзхъфывапролджэячсмитьбю.",
+        "qwertyuiop[]asdfghjkl;'zxcvbnm,./"
+    )
+    parts = []
+    for p in combo.split("+"):
+        p = p.strip().lower().translate(cyr_to_lat)
+        parts.append(p)
     return "+".join(parts)
 
 
-def _to_keyboard_lib_syntax(combo: str) -> str:
-    """Back-compat alias for existing callers."""
-    return normalize_combo(combo)
+def _combo_to_pynput(combo: str) -> str:
+    """Translate our combo format into pynput's GlobalHotKeys format.
 
-
-def is_valid_combo(combo: str) -> bool:
-    """Return True iff `keyboard` can parse this combo."""
-    try:
-        kb.parse_hotkey(normalize_combo(combo))
-        return True
-    except Exception:
-        return False
+    Examples:
+      "f9"             -> "<f9>"
+      "ctrl+shift+v"   -> "<ctrl>+<shift>+v"
+      "pause"          -> "<pause>"
+      "ctrl+alt+d"     -> "<ctrl>+<alt>+d"
+    """
+    SPECIAL = {
+        "ctrl", "alt", "shift", "cmd", "super", "win",
+        "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8",
+        "f9", "f10", "f11", "f12",
+        "pause", "scroll_lock", "esc", "tab", "space",
+        "enter", "backspace", "delete", "insert", "home",
+        "end", "page_up", "page_down", "up", "down", "left", "right",
+    }
+    parts = []
+    for p in combo.split("+"):
+        p = p.strip().lower()
+        if p in SPECIAL:
+            parts.append(f"<{p}>")
+        else:
+            parts.append(p)
+    return "+".join(parts)
 
 
 class HotkeyWatcher:
+    """Listens for a single global hotkey combo and invokes a callback on
+    each press. Cross-platform via pynput."""
+
     def __init__(self, combo: str, on_trigger: Callable[[], None]) -> None:
-        self._combo_cfg = combo
-        self._combo = _to_keyboard_lib_syntax(combo)
+        self._combo_raw = combo
         self._on_trigger = on_trigger
-        self._handle: object | None = None
+        self._listener = None
 
     def start(self) -> None:
-        if self._handle is not None:
-            return
+        from pynput import keyboard as _kb
+        pynput_combo = _combo_to_pynput(self._combo_raw)
         try:
-            # suppress=False: do not swallow the key; trigger_on_release=False
-            # so F9 press is instantaneous.
-            self._handle = kb.add_hotkey(
-                self._combo,
-                self._on_fire,
-                suppress=False,
-                trigger_on_release=False,
-            )
-            log.info("hotkey %s registered (keyboard lib)", self._combo)
+            self._listener = _kb.GlobalHotKeys({pynput_combo: self._on_fire})
+            self._listener.start()
+            log.info("hotkey %s registered (pynput, as %r)",
+                     self._combo_raw, pynput_combo)
         except Exception:
-            log.exception("failed to register hotkey %s", self._combo)
+            log.exception("hotkey registration failed for %r", self._combo_raw)
 
     def stop(self) -> None:
-        if self._handle is None:
-            return
-        try:
-            kb.remove_hotkey(self._handle)
-        except Exception:
-            log.exception("failed to remove hotkey")
-        self._handle = None
+        if self._listener is not None:
+            try:
+                self._listener.stop()
+            except Exception:
+                log.exception("hotkey listener stop failed")
+            self._listener = None
 
     def _on_fire(self) -> None:
-        log.info("hotkey fired: %s", self._combo)
+        log.info("hotkey fired: %s", self._combo_raw)
         try:
             self._on_trigger()
         except Exception:

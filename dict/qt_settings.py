@@ -36,7 +36,6 @@ import threading
 import time
 from typing import Callable, Optional
 
-import keyboard as kb  # type: ignore[import]
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor, QFont, QLinearGradient, QMouseEvent, QPainter, QPen,
@@ -56,6 +55,65 @@ from dict.settings import Settings
 from dict.utils_logging import get_logger
 
 log = get_logger(__name__)
+
+
+def _read_one_hotkey(timeout_s: float = 30.0) -> str:
+    """Capture one full key combo via pynput. Returns a string like
+    'ctrl+shift+v' or 'f9'. Blocks until the user presses any non-modifier
+    key (or a single key like F-keys / pause), then returns the snapshot
+    of modifiers+key. Times out at `timeout_s` and returns ''.
+
+    Cross-platform replacement for the old keyboard.read_hotkey()."""
+    from pynput import keyboard as _kb
+    captured = {"combo": ""}
+    held: set[str] = set()
+    done = threading.Event()
+
+    MOD_MAP = {
+        _kb.Key.ctrl: "ctrl", _kb.Key.ctrl_l: "ctrl", _kb.Key.ctrl_r: "ctrl",
+        _kb.Key.shift: "shift", _kb.Key.shift_l: "shift", _kb.Key.shift_r: "shift",
+        _kb.Key.alt: "alt", _kb.Key.alt_l: "alt", _kb.Key.alt_r: "alt",
+        _kb.Key.cmd: "cmd", _kb.Key.cmd_l: "cmd", _kb.Key.cmd_r: "cmd",
+    }
+
+    def _name(k) -> str:
+        if k in MOD_MAP:
+            return MOD_MAP[k]
+        if isinstance(k, _kb.Key):
+            return k.name  # 'f9', 'pause', 'space', etc.
+        if isinstance(k, _kb.KeyCode):
+            if k.char is not None:
+                return k.char.lower()
+            return f"vk{k.vk}" if k.vk is not None else "?"
+        return "?"
+
+    def on_press(k):
+        nm = _name(k)
+        if nm in {"ctrl", "shift", "alt", "cmd"}:
+            held.add(nm)
+            return
+        # Non-modifier key: snapshot and finish
+        parts = []
+        for m in ("ctrl", "alt", "shift", "cmd"):
+            if m in held:
+                parts.append(m)
+        parts.append(nm)
+        captured["combo"] = "+".join(parts)
+        done.set()
+        return False  # stop listener
+
+    def on_release(k):
+        nm = _name(k)
+        held.discard(nm)
+
+    listener = _kb.Listener(on_press=on_press, on_release=on_release)
+    listener.start()
+    done.wait(timeout=timeout_s)
+    try:
+        listener.stop()
+    except Exception:
+        pass
+    return captured["combo"]
 
 
 MODEL_CHOICES = ["large-v3", "medium", "small", "base", "tiny"]
@@ -959,7 +1017,7 @@ class SettingsDialog(QDialog):
 
         def capture() -> None:
             try:
-                raw = kb.read_hotkey(suppress=False)
+                raw = _read_one_hotkey()
             except Exception:
                 log.exception("hotkey capture failed")
                 raw = self._current.hotkey

@@ -1530,35 +1530,37 @@ class MainWindow(QWidget):
         topmost state on the next show/paint and the user sees the window
         bouncing back to top.
         """
-        try:
-            import ctypes
-            HWND_TOPMOST    = -1
-            HWND_NOTOPMOST  = -2
-            HWND_TOP        =  0
-            HWND_BOTTOM     =  1
-            SWP_NOSIZE      = 0x0001
-            SWP_NOMOVE      = 0x0002
-            SWP_NOACTIVATE  = 0x0010
-            flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
-            hwnd = int(self.winId())
-            user32 = ctypes.windll.user32
-            if on:
-                # Pin topmost — covers all non-topmost windows
-                user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
-                # Also raise above other topmost peers (rare but possible)
-                user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags)
-            else:
-                # Clear topmost
-                user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags)
-                # Push to back of normal z-order so any other window covers us
-                user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, flags)
-        except Exception:
-            log.exception("SetWindowPos failed (continuing with Qt fallback)")
+        import sys as _sys
+        if _sys.platform == "win32":
+            try:
+                import ctypes
+                HWND_TOPMOST    = -1
+                HWND_NOTOPMOST  = -2
+                HWND_TOP        =  0
+                HWND_BOTTOM     =  1
+                SWP_NOSIZE      = 0x0001
+                SWP_NOMOVE      = 0x0002
+                SWP_NOACTIVATE  = 0x0010
+                flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                hwnd = int(self.winId())
+                user32 = ctypes.windll.user32
+                if on:
+                    # Pin topmost — covers all non-topmost windows
+                    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+                    # Also raise above other topmost peers (rare but possible)
+                    user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags)
+                else:
+                    # Clear topmost
+                    user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags)
+                    # Push to back of normal z-order so any other window covers us
+                    user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, flags)
+            except Exception:
+                log.exception("SetWindowPos failed (continuing with Qt fallback)")
 
-        # Sync Qt's internal flag state without triggering a hide/show flash.
-        # We use setWindowFlag but DO NOT call show() afterwards — Qt's next
-        # natural repaint picks up the new flag. The visible state on screen
-        # is already what we want thanks to the Win32 call above.
+        # Sync Qt's internal flag state. On Windows the SetWindowPos call
+        # already did the visible change; this just keeps Qt's view in sync.
+        # On macOS/Linux this IS the topmost mechanism (Qt setWindowFlag +
+        # show()/raise_()/lower()), at the cost of a brief flag-toggle flicker.
         try:
             current = bool(self.windowFlags() & Qt.WindowStaysOnTopHint)
             if current != bool(on):
@@ -1567,5 +1569,14 @@ class MainWindow(QWidget):
                 if not self.isVisible():
                     # Restore visibility without focus or activation.
                     self.show()
+                else:
+                    # On non-Windows, re-show to apply the new flag.
+                    if _sys.platform != "win32":
+                        self.show()
+            if _sys.platform != "win32":
+                if on:
+                    self.raise_()
+                else:
+                    self.lower()
         except Exception:
             log.exception("Qt flag sync failed")
