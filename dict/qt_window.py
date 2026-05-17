@@ -895,7 +895,7 @@ class _HotkeySlab(QWidget):
     def sizeHint(self) -> QSize:
         from dict.qt_design import FONT_MONO
         f = QFont(FONT_MONO)
-        f.setPointSize(8)  # design: 10px ≈ 8pt (was 7)
+        f.setPointSize(7)  # compact: was 8
         f.setWeight(QFont.Medium)
         from PySide6.QtGui import QFontMetrics
         fm = QFontMetrics(f)
@@ -932,7 +932,7 @@ class _HotkeySlab(QWidget):
 
         # Draw text: "HOTKEY " in dim, then label in hi
         f = QFont(FONT_MONO)
-        f.setPointSize(8)  # design: 10px ≈ 8pt (was 7)
+        f.setPointSize(7)  # compact: was 8
         f.setWeight(QFont.Medium)
         from PySide6.QtGui import QFontMetrics
         fm = QFontMetrics(f)
@@ -982,7 +982,7 @@ class _StatusPill(QWidget):
     def sizeHint(self) -> QSize:
         from dict.qt_design import FONT_RAJDHANI
         f = QFont(FONT_RAJDHANI)
-        f.setPointSize(8)  # was 7 — design min 8pt for Rajdhani labels
+        f.setPointSize(7)  # compact: was 8
         f.setWeight(QFont.DemiBold)
         # Account for 22% letter-spacing applied in paintEvent (QFontMetrics
         # returns width without the spacing, so the rendered string is ~22%
@@ -1087,7 +1087,7 @@ class _StatusPill(QWidget):
             text_col = col
 
         f = QFont(FONT_RAJDHANI)
-        f.setPointSize(8)  # was 7 — design min 8pt
+        f.setPointSize(7)  # compact: was 8
         f.setWeight(QFont.DemiBold)
         f.setLetterSpacing(QFont.PercentageSpacing, 122)  # 0.22em tracking
         p.setFont(f)
@@ -1183,7 +1183,7 @@ class _HeaderWidget(QWidget):
 
         dict_label = QLabel("DICT")
         f_dict = QFont(FONT_RAJDHANI)
-        f_dict.setPointSize(18)
+        f_dict.setPointSize(14)
         f_dict.setWeight(QFont.Bold)
         # 0.32em tracking — PercentageSpacing renders more reliably across DPIs
         f_dict.setLetterSpacing(QFont.PercentageSpacing, 132)
@@ -1439,8 +1439,8 @@ class MainWindow(QWidget):
             | Qt.Tool
         )
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        self.setMinimumSize(560, 680)
-        self.resize(560, 680)
+        self.setMinimumSize(500, 620)
+        self.resize(500, 620)
 
         # Ensure any gap around the panel (e.g. bleed from drop shadow) is
         # painted BG (#03040a) rather than the system default light gray.
@@ -1495,10 +1495,10 @@ class MainWindow(QWidget):
             f"border-bottom: 1px solid {LINE_DIM.name(QColor.HexArgb)};"
         )
         ch = QHBoxLayout(cap)
-        ch.setContentsMargins(18, 12, 18, 8)
-        ch.setSpacing(18)
+        ch.setContentsMargins(14, 10, 14, 6)
+        ch.setSpacing(14)
         self._record_widget = RecordWidget()
-        self._record_widget.setFixedSize(200, 200)
+        self._record_widget.setFixedSize(170, 170)
         self._record_widget.clicked.connect(self._on_toggle)
         self._status_strip = StatusStrip()
         ch.addWidget(self._record_widget, 0)
@@ -1512,7 +1512,7 @@ class MainWindow(QWidget):
         # Transcript panel (flex: 1)
         trx_wrapper = QWidget()
         tw = QVBoxLayout(trx_wrapper)
-        tw.setContentsMargins(16, 10, 16, 8)
+        tw.setContentsMargins(12, 6, 12, 6)
         self._transcript_panel = TranscriptPanel()
         tw.addWidget(self._transcript_panel, 1)
         inner.addWidget(trx_wrapper, 1)
@@ -1626,8 +1626,36 @@ class MainWindow(QWidget):
     def _apply_toggle(self) -> None:
         if self.isVisible():
             self.hide()
-        else:
-            self._apply_show()
+            return
+        self.show()
+        # Briefly pop to topmost so the window actually appears above the
+        # foreground app the user was working in. Drop back to non-topmost on
+        # the next tick so other apps can naturally cover Dict afterwards.
+        try:
+            import sys as _s
+            if _s.platform == "win32":
+                import ctypes
+                HWND_TOPMOST = -1
+                HWND_NOTOPMOST = -2
+                SWP_NOMOVE = 0x0002
+                SWP_NOSIZE = 0x0001
+                SWP_NOACTIVATE = 0x0010
+                user32 = ctypes.windll.user32
+                hwnd = int(self.winId())
+                user32.SetWindowPos(
+                    hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                )
+                from PySide6.QtCore import QTimer as _QT
+                _QT.singleShot(
+                    800,
+                    lambda: user32.SetWindowPos(
+                        hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    ),
+                )
+        except Exception:
+            log.exception("tray show: SetWindowPos topmost flash failed")
 
     def _apply_partial_appended(self, text: str) -> None:
         self._transcript_panel.append_partial(text)
@@ -1688,10 +1716,13 @@ class MainWindow(QWidget):
                     # Also raise above other topmost peers (rare but possible)
                     user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags)
                 else:
-                    # Clear topmost
+                    # Clear topmost. We DO NOT push to HWND_BOTTOM anymore —
+                    # user wants the window to stay where the eye is (still
+                    # visible above the desktop) until they explicitly click
+                    # another app, which then naturally covers Dict (because
+                    # Dict is no longer topmost). Pushing to BOTTOM made it
+                    # "disappear" relative to the workflow's other windows.
                     user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags)
-                    # Push to back of normal z-order so any other window covers us
-                    user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, flags)
             except Exception:
                 log.exception("SetWindowPos failed (continuing with Qt fallback)")
 

@@ -25,7 +25,7 @@ class _LevelMeter(QWidget):
     SEGMENTS = 28
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setFixedSize(140, 14)
+        self.setFixedSize(124, 14)
         self._level = 0.0
         self._state = "idle"
         self._timer = QTimer(self)
@@ -74,24 +74,24 @@ class StatusStrip(QWidget):
 
         self._state_label_l = self._label_dim("STATE")
         self._state_value = QLabel("IDLE")
-        # Large readout: Rajdhani Bold ~14pt (spec 14–20px), 0.22em tracking
-        font = QFont(FONT_RAJDHANI); font.setPointSize(14); font.setWeight(QFont.Bold)
+        # Large readout: Rajdhani Bold 12pt (compact: was 14), 0.22em tracking
+        font = QFont(FONT_RAJDHANI); font.setPointSize(12); font.setWeight(QFont.Bold)
         font.setLetterSpacing(QFont.PercentageSpacing, 122)
         self._state_value.setFont(font)
         self._state_value.setStyleSheet(f"color: {state_color('idle').name()};")
 
         self._elapsed_label_l = self._label_dim("ELAPSED")
         self._elapsed_value = QLabel("00:00.0")
-        # Mono Medium for tabular numerics (spec wants tabular-nums readouts)
-        m = QFont(FONT_MONO); m.setPointSize(11); m.setWeight(QFont.Medium)
+        # Mono Medium 10pt (compact: was 11) for tabular numerics
+        m = QFont(FONT_MONO); m.setPointSize(10); m.setWeight(QFont.Medium)
         m.setStyleHint(QFont.Monospace)
         self._elapsed_value.setFont(m)
         self._elapsed_value.setStyleSheet(f"color: {TEXT_HI.name()};")
 
         self._peak_label_l = self._label_dim("PEAK")
         self._peak_value = QLabel("-∞ dB")
-        # Same Mono Medium, slightly dimmer color
-        mp = QFont(FONT_MONO); mp.setPointSize(11); mp.setWeight(QFont.Medium)
+        # Same Mono Medium 10pt, slightly dimmer color
+        mp = QFont(FONT_MONO); mp.setPointSize(10); mp.setWeight(QFont.Medium)
         mp.setStyleHint(QFont.Monospace)
         self._peak_value.setFont(mp)
         self._peak_value.setStyleSheet(f"color: {TEXT_MID.name()};")
@@ -108,7 +108,7 @@ class StatusStrip(QWidget):
         ]:
             row = QHBoxLayout()
             row.setSpacing(10)
-            lbl.setFixedWidth(64)
+            lbl.setFixedWidth(56)
             row.addWidget(lbl, 0)
             row.addWidget(val, 1, Qt.AlignLeft | Qt.AlignVCenter)
             v.addLayout(row)
@@ -119,8 +119,8 @@ class StatusStrip(QWidget):
 
     def _label_dim(self, text: str) -> QLabel:
         lbl = QLabel(text)
-        # Section label: Mono 8pt with wide tracking (design min 8pt)
-        f = QFont(FONT_MONO); f.setPointSize(8)
+        # Section label: Mono 7pt (compact: was 8) with wide tracking
+        f = QFont(FONT_MONO); f.setPointSize(7)
         f.setStyleHint(QFont.Monospace)
         f.setLetterSpacing(QFont.PercentageSpacing, 128)
         lbl.setFont(f)
@@ -128,9 +128,25 @@ class StatusStrip(QWidget):
         return lbl
 
     def _divider(self) -> QWidget:
-        w = QWidget(); w.setFixedHeight(1)
-        w.setStyleSheet(f"background-color: {LINE_DIM.name(QColor.HexArgb)};")
-        return w
+        """Horizontal gradient line: line-mid alpha 18% at left, fades to
+        transparent at 80% across the width. Mirrors app.jsx::Divider."""
+        from PySide6.QtGui import QLinearGradient, QBrush, QPainter
+
+        class _GradLine(QWidget):
+            def __init__(self) -> None:
+                super().__init__()
+                self.setFixedHeight(1)
+
+            def paintEvent(self, _ev) -> None:
+                p = QPainter(self)
+                w = self.width()
+                grad = QLinearGradient(0, 0, w, 0)
+                grad.setColorAt(0.0, QColor(138, 149, 172, int(0.18 * 255)))
+                grad.setColorAt(0.80, QColor(138, 149, 172, 0))
+                grad.setColorAt(1.0, QColor(138, 149, 172, 0))
+                p.fillRect(self.rect(), QBrush(grad))
+
+        return _GradLine()
 
     def set_state(self, state: str) -> None:
         self._state = state

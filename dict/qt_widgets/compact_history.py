@@ -30,24 +30,24 @@ def _make_row_widget(index: int, timestamp: str, lang: str, short_text: str) -> 
     row = QWidget()
     row.setAttribute(Qt.WA_TranslucentBackground, True)
     hl = QHBoxLayout(row)
-    hl.setContentsMargins(14, 4, 14, 4)
-    hl.setSpacing(10)
+    hl.setContentsMargins(12, 3, 12, 3)
+    hl.setSpacing(8)
 
     # Index label e.g. "01"
     idx_lbl = QLabel(f"{index:02d}")
-    f_idx = QFont(FONT_MONO); f_idx.setPointSize(8)
+    f_idx = QFont(FONT_MONO); f_idx.setPointSize(7)
     f_idx.setStyleHint(QFont.Monospace)
     idx_lbl.setFont(f_idx)
     idx_lbl.setStyleSheet(f"color: {TEXT_DIM.name()}; background: transparent;")
-    idx_lbl.setFixedWidth(20)
+    idx_lbl.setFixedWidth(18)
 
     # Timestamp
     ts_lbl = QLabel(timestamp)
-    f_ts = QFont(FONT_MONO); f_ts.setPointSize(9)
+    f_ts = QFont(FONT_MONO); f_ts.setPointSize(8)
     f_ts.setStyleHint(QFont.Monospace)
     ts_lbl.setFont(f_ts)
     ts_lbl.setStyleSheet(f"color: {TEXT_MID.name()}; background: transparent;")
-    ts_lbl.setFixedWidth(60)
+    ts_lbl.setFixedWidth(54)
 
     # Language chip
     lang_lbl = QLabel(lang)
@@ -56,14 +56,14 @@ def _make_row_widget(index: int, timestamp: str, lang: str, short_text: str) -> 
     border_color = LINE_MID.name(QColor.HexArgb)
     lang_lbl.setStyleSheet(
         f"color: {TEXT_MID.name()}; background: transparent;"
-        f" border: 1px solid {border_color}; padding: 1px 3px;"
+        f" border: 1px solid {border_color}; padding: 0px 3px;"
     )
-    lang_lbl.setFixedWidth(24)
+    lang_lbl.setFixedWidth(22)
     lang_lbl.setAlignment(Qt.AlignCenter)
 
     # Text label (ellipsized)
     text_lbl = QLabel(short_text)
-    f_text = QFont(FONT_MONO); f_text.setPointSize(10)
+    f_text = QFont(FONT_MONO); f_text.setPointSize(9)
     f_text.setStyleHint(QFont.Monospace)
     text_lbl.setFont(f_text)
     text_lbl.setStyleSheet(f"color: {TEXT_MID.name()}; background: transparent;")
@@ -79,8 +79,8 @@ def _make_row_widget(index: int, timestamp: str, lang: str, short_text: str) -> 
 
 class CompactHistory(QWidget):
     item_copied = Signal(str)
-    EXPANDED_H = 140
-    COLLAPSED_H = 32
+    EXPANDED_H = 110
+    COLLAPSED_H = 28
 
     def __init__(self, history: History, on_copy, parent=None) -> None:
         super().__init__(parent)
@@ -103,10 +103,10 @@ class CompactHistory(QWidget):
                 background-color: {SURFACE_0.name()};
                 border: none;
                 font-family: '{FONT_MONO}';
-                font-size: 10pt;  /* design: body 12–13px, list rows can be 10–11pt */
+                font-size: 9pt;  /* compact: was 10pt */
             }}
             QListWidget::item {{
-                padding: 4px 14px;
+                padding: 3px 12px;
                 border-left: 2px solid transparent;
                 color: {TEXT_MID.name()};
             }}
@@ -149,15 +149,15 @@ class CompactHistory(QWidget):
 
         # Header
         hdr = QWidget(); hdr.setObjectName("hHeader")
-        hh = QHBoxLayout(hdr); hh.setContentsMargins(14, 8, 14, 6); hh.setSpacing(8)
+        hh = QHBoxLayout(hdr); hh.setContentsMargins(12, 6, 12, 4); hh.setSpacing(8)
         title = QLabel("HISTORY")
-        # Inner label: Rajdhani SemiBold 9pt
-        ft = QFont(FONT_RAJDHANI); ft.setPointSize(9); ft.setWeight(QFont.DemiBold)
+        # Inner label: Rajdhani SemiBold 8pt (compact: was 9)
+        ft = QFont(FONT_RAJDHANI); ft.setPointSize(8); ft.setWeight(QFont.DemiBold)
         ft.setLetterSpacing(QFont.PercentageSpacing, 122)
         title.setFont(ft); title.setStyleSheet(f"color: {TEXT_HI.name()};")
 
         self._count_label = QLabel(f"· {len(self._history.items())} ENTRIES")
-        fc = QFont(FONT_MONO); fc.setPointSize(8)  # design min 8pt
+        fc = QFont(FONT_MONO); fc.setPointSize(7)  # compact: was 8
         fc.setStyleHint(QFont.Monospace)
         fc.setLetterSpacing(QFont.PercentageSpacing, 108)
         self._count_label.setFont(fc); self._count_label.setStyleSheet(f"color: {TEXT_DIM.name()};")
@@ -203,7 +203,7 @@ class CompactHistory(QWidget):
             short = entry.text[:60] + ("…" if len(entry.text) > 60 else "")
             lang = _detect_lang(entry.text)
             item = QListWidgetItem()
-            item.setSizeHint(QSize(0, 28))
+            item.setSizeHint(QSize(0, 24))
             self._list.addItem(item)
             row_widget = _make_row_widget(i + 1, ts, lang, short)
             self._list.setItemWidget(item, row_widget)

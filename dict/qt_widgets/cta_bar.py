@@ -17,8 +17,8 @@ class _HotkeyBadge(QLabel):
     """Slab badge (clipped corners) showing the hotkey."""
     def __init__(self, label: str = "F9", parent=None) -> None:
         super().__init__(label.upper(), parent)
-        # Design spec: JetBrains Mono 600 11px ≈ 9pt for the F9 chip
-        f = QFont(FONT_MONO); f.setPointSize(9); f.setWeight(QFont.DemiBold)
+        # Compact: 8pt for the F9 chip (was 9)
+        f = QFont(FONT_MONO); f.setPointSize(8); f.setWeight(QFont.DemiBold)
         f.setStyleHint(QFont.Monospace)
         f.setLetterSpacing(QFont.PercentageSpacing, 116)
         self.setFont(f)
@@ -75,7 +75,7 @@ class CTABar(QWidget):
         h.setAlignment(Qt.AlignCenter)
         h.setSpacing(10)
 
-        f_mono_sm = QFont(FONT_MONO); f_mono_sm.setPointSize(8)  # design min 8pt
+        f_mono_sm = QFont(FONT_MONO); f_mono_sm.setPointSize(7)  # compact: was 8
         f_mono_sm.setStyleHint(QFont.Monospace)
         f_mono_sm.setLetterSpacing(QFont.PercentageSpacing, 114)
 
@@ -93,7 +93,7 @@ class CTABar(QWidget):
         h.addWidget(self._badge)
         h.addWidget(self._post)
 
-        self.setStyleSheet(f"QWidget {{ border-bottom: 1px solid {LINE_DIM.name(QColor.HexArgb)}; }}")
+        # Bottom border is drawn as a gradient in paintEvent (mirrors header).
 
     def set_state(self, state: str) -> None:
         self._badge.set_state(state)
@@ -106,3 +106,15 @@ class CTABar(QWidget):
 
     def set_hotkey(self, label: str) -> None:
         self._badge.set_label(label)
+
+    def paintEvent(self, ev) -> None:
+        super().paintEvent(ev)
+        # Bottom divider as horizontal gradient (line-mid 18% → transparent 80%)
+        from PySide6.QtGui import QLinearGradient, QBrush
+        p = QPainter(self)
+        y = self.height() - 1
+        grad = QLinearGradient(0, y, self.width(), y)
+        grad.setColorAt(0.0, QColor(138, 149, 172, int(0.18 * 255)))
+        grad.setColorAt(0.80, QColor(138, 149, 172, 0))
+        grad.setColorAt(1.0, QColor(138, 149, 172, 0))
+        p.fillRect(0, y, self.width(), 1, QBrush(grad))

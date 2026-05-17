@@ -64,20 +64,19 @@ class Tray(QObject):
 
     def _on_activated(self, reason) -> None:
         from PySide6.QtWidgets import QSystemTrayIcon as QSTI
-        # Accept Trigger (single left-click), DoubleClick, MiddleClick.
-        # The enum lives under ActivationReason in PySide6; alias it both ways
-        # for safety across versions.
         try:
-            triggers = {
-                QSTI.ActivationReason.Trigger,
-                QSTI.ActivationReason.DoubleClick,
-                QSTI.ActivationReason.MiddleClick,
-            }
+            ctx = QSTI.ActivationReason.Context
+            dbl = QSTI.ActivationReason.DoubleClick
         except AttributeError:
-            triggers = {QSTI.Trigger, QSTI.DoubleClick, QSTI.MiddleClick}
-        log.info("tray activated reason=%s match=%s", reason, reason in triggers)
-        if reason in triggers:
-            try:
-                self._on_left_click()
-            except Exception:
-                log.exception("tray click handler raised")
+            ctx = QSTI.Context
+            dbl = QSTI.DoubleClick
+        log.info("tray activated reason=%s", reason)
+        if reason == ctx:
+            return  # context menu fires on its own
+        # Any other activation (Trigger, DoubleClick, MiddleClick, Unknown) = toggle.
+        # Some Windows builds emit DoubleClick reliably but not Trigger on a
+        # single click; accepting everything except Context makes it bulletproof.
+        try:
+            self._on_left_click()
+        except Exception:
+            log.exception("tray click handler raised")
