@@ -11,24 +11,33 @@ from dict.utils_logging import get_logger
 
 log = get_logger(__name__)
 
-_MIN_CUDA_VRAM_BYTES = 4 * (1024 ** 3)
-
-
 def probe_cuda() -> tuple[str, str]:
-    """Return (device, compute_type). CUDA needs >=4 GB VRAM; otherwise CPU int8."""
+    """Return (device, compute_type).
+
+    Uses ctranslate2 directly to detect CUDA — no torch dependency required.
+    If CUDA is available we pick the best supported compute type:
+      - int8_float16: quantized weights, float16 math — best balance for ≥4GB
+        cards (small VRAM footprint, fast inference)
+      - float16: fallback if int8_float16 unsupported
+      - cpu+int8: no usable CUDA device
+    """
     fallback = ("cpu", "int8")
     try:
-        import torch  # type: ignore[import]
+        import ctranslate2  # type: ignore[import]
     except Exception:
+        log.warning("ctranslate2 import failed; falling back to CPU")
         return fallback
     try:
-        if not torch.cuda.is_available() or torch.cuda.device_count() <= 0:
+        n = ctranslate2.get_cuda_device_count()
+        if n <= 0:
             return fallback
-        props = torch.cuda.get_device_properties(0)
-        if int(getattr(props, "total_memory", 0)) < _MIN_CUDA_VRAM_BYTES:
-            return fallback
-        return ("cuda", "float16")
+        supported = set(ctranslate2.get_supported_compute_types("cuda"))
+        for ct in ("int8_float16", "float16", "int8"):
+            if ct in supported:
+                return ("cuda", ct)
+        return fallback
     except Exception:
+        log.exception("CUDA probe failed; falling back to CPU")
         return fallback
 
 
