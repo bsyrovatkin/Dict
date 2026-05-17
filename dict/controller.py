@@ -140,11 +140,15 @@ class Controller:
             current = self._state
         if current is State.IDLE:
             return
-        # Separator: prepend a NON-BREAKING SPACE (U+00A0) before every chunk
-        # except the first. Visually identical to a regular space in text
-        # inputs, but pynput sends it via SendInput Unicode (not as VK_SPACE)
-        # so browsers don't fire their "Space = scroll down" shortcut.
-        payload = (" " + text) if self._session_streamed else text
+        # Replace EVERY space (separator AND inside chunk text) with
+        # NON-BREAKING SPACE (U+00A0). pynput on Windows sends regular
+        # ' ' via the real VK_SPACE virtual key, which browsers intercept
+        # as 'Space = page-scroll-down'. NBSP is not in pynput's keymap,
+        # so it falls through to SendInput KEYEVENTF_UNICODE - no key event
+        # fires, browser sees a pure Unicode char insertion.
+        text_nbsp = text.replace(' ', ' ')
+        sep = ' ' if self._session_streamed else ''
+        payload = sep + text_nbsp
         # Lazy import — keeps controller decoupled from paste module's deps.
         from dict import paste as _paste_mod
         from dict import config as _cfg
@@ -155,7 +159,7 @@ class Controller:
                 delay_s=_cfg.STREAM_TYPE_DELAY_S,
             )
             self._session_streamed = True
-            log.info("stream-type chunk (%d chars) ok=%s", len(payload), ok)
+            log.info("stream-type chunk (%d chars, all spaces->NBSP) ok=%s", len(payload), ok)
         except Exception:
             log.exception("stream-type failed for chunk")
 
