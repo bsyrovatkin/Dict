@@ -1152,11 +1152,17 @@ class _HeaderWidget(QWidget):
             "}"
         )
 
+        # Critical: NoFocus on all header buttons. Otherwise typewriter
+        # streaming-paste sends Space keystrokes which Qt interprets as
+        # "activate focused button" — opening Settings repeatedly when the
+        # gear has stolen focus from an earlier mouse click. Mouse clicks
+        # still work because we explicitly handle clicked() signal.
         self.settings_btn = QPushButton()
         self.settings_btn.setFixedSize(28, 24)
         self.settings_btn.setCursor(Qt.PointingHandCursor)
         self.settings_btn.setStyleSheet(btn_style_normal_hover)
         self.settings_btn.setToolTip("Settings")
+        self.settings_btn.setFocusPolicy(Qt.NoFocus)
         self.settings_btn.clicked.connect(on_settings)
         self._paint_gear_icon(self.settings_btn)
 
@@ -1165,6 +1171,7 @@ class _HeaderWidget(QWidget):
         self.minimize_btn.setCursor(Qt.PointingHandCursor)
         self.minimize_btn.setStyleSheet(btn_style_normal_hover)
         self.minimize_btn.setToolTip("Minimize")
+        self.minimize_btn.setFocusPolicy(Qt.NoFocus)
         self.minimize_btn.clicked.connect(on_minimize)
 
         self.close_btn = QPushButton("✕")
@@ -1172,6 +1179,7 @@ class _HeaderWidget(QWidget):
         self.close_btn.setCursor(Qt.PointingHandCursor)
         self.close_btn.setStyleSheet(btn_style_close_hover)
         self.close_btn.setToolTip("Close")
+        self.close_btn.setFocusPolicy(Qt.NoFocus)
         self.close_btn.clicked.connect(on_close)
 
         h.addWidget(self.settings_btn)
