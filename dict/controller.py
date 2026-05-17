@@ -40,6 +40,7 @@ class _WindowProto(Protocol):
     def append_partial(self, text: str) -> None: ...
     def set_preview(self, text: str) -> None: ...
     def clear_partials(self) -> None: ...
+    def set_always_on_top(self, on: bool) -> None: ...
 
 
 class _HistoryProto(Protocol):
@@ -196,6 +197,12 @@ class Controller:
         self._sounds.play_start()
         self._tray.set_state("recording")
         self._window.set_state("recording")
+        # Pin the HUD on top for the duration of REC/DECODING so the user
+        # can always see the live transcript above other windows.
+        try:
+            self._window.set_always_on_top(True)
+        except Exception:
+            log.exception("set_always_on_top(True) failed (continuing)")
         try:
             self._window.show_for(self._auto_show_seconds)
         except Exception:
@@ -265,5 +272,11 @@ class Controller:
     def _return_to_idle(self) -> None:
         self._tray.set_state("idle")
         self._window.set_state("idle")
+        # Drop the always-on-top pin so the user can cover the HUD with
+        # other windows normally when nothing is being captured.
+        try:
+            self._window.set_always_on_top(False)
+        except Exception:
+            log.exception("set_always_on_top(False) failed (continuing)")
         with self._state_lock:
             self._state = State.IDLE

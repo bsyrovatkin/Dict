@@ -115,6 +115,10 @@ class _TranscriptBody(QTextEdit):
     """
     FRESH_MS = 900.0   # how long a freshly-committed chunk stays highlighted
     FADE_MS = 600.0    # additional fade-out window after FRESH_MS expires
+    # Per-character reveal delay during typewriter animation. Match the
+    # SendInput cadence in config.STREAM_TYPE_DELAY_S (0.018s = 18ms) so the
+    # in-app transcript reveals at the same rhythm as text typed externally.
+    TYPE_DELAY_MS = 18.0
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -176,24 +180,53 @@ class _TranscriptBody(QTextEdit):
         for idx, ch in enumerate(self._chunks):
             age = now_ms - ch["born_ms"]
             from_end = n - 1 - idx
+            # --- Typewriter reveal window ---
+            # Each chunk first "types in" one char at a time at TYPE_DELAY_MS.
+            # The cyan highlight stays full during reveal; the existing 3-stage
+            # fade window is shifted to start AFTER typing finishes (so the
+            # fresh-chunk highlight + caret aren't competing).
+            chunk_len = len(ch["text"])
+            typewriter_ms = max(60.0, chunk_len * self.TYPE_DELAY_MS)
+            if age < typewriter_ms:
+                # Partial reveal — clamp typed-char count and append a blinking caret.
+                typed_frac = max(0.0, age / typewriter_ms)
+                n_typed = max(1, int(chunk_len * typed_frac))
+                revealed = ch["text"][:n_typed]
+                txt = self._esc(revealed)
+                # Caret blink phase: cycle visible/dim every ~500ms.
+                caret_on = (int(age / 250.0) % 2) == 0
+                caret_html = (
+                    '<span style="color:#7be4ff;">&#9614;</span>'
+                    if caret_on else
+                    '<span style="color:rgba(123,228,255,0.20);">&#9614;</span>'
+                )
+                tint_alpha = 0.22
+                parts.append(
+                    f'<span style="background:rgba(123,228,255,{tint_alpha:.3f});'
+                    f' color:#ffffff; padding:0 3px;">{txt}{caret_html}</span>'
+                )
+                any_animating = True
+                continue
+            # Once fully typed, measure the fade from the moment typing finished.
+            post_type_age = age - typewriter_ms
             txt = self._esc(ch["text"])
-            # Smooth 3-stage fade:
+            # Smooth 3-stage fade (anchored at end of typewriter window):
             #   0 .. FRESH_MS         : full highlight (white on tint)
             #   FRESH_MS .. +FADE_MS  : interpolated tint alpha → 0, text white → text_hi
             #   else                  : settled colour (text_hi for last 3, text_mid older)
-            if age < self.FRESH_MS:
+            if post_type_age < self.FRESH_MS:
                 # Eased ramp during the first 200ms so the highlight feels
                 # like it "arrives" rather than popping in.
-                ramp = min(1.0, age / 200.0)
+                ramp = min(1.0, post_type_age / 200.0)
                 tint_alpha = 0.22 * (0.4 + 0.6 * ramp)
                 parts.append(
                     f'<span style="background:rgba(123,228,255,{tint_alpha:.3f});'
                     f' color:#ffffff; padding:0 3px;">{txt}</span>'
                 )
                 any_animating = True
-            elif age < self.FRESH_MS + self.FADE_MS:
+            elif post_type_age < self.FRESH_MS + self.FADE_MS:
                 # Linear fade-out of the tint
-                k = (age - self.FRESH_MS) / self.FADE_MS  # 0..1
+                k = (post_type_age - self.FRESH_MS) / self.FADE_MS  # 0..1
                 tint_alpha = 0.22 * (1.0 - k)
                 # Lerp text color white → TEXT_HI
                 hi_r, hi_g, hi_b = TEXT_HI.red(), TEXT_HI.green(), TEXT_HI.blue()
@@ -235,11 +268,12 @@ class _TranscriptBody(QTextEdit):
         # A real commit invalidates any preview we might be showing.
         self._preview_text = ""
         self._render()
-        # Drive the fade animation: repaint every 60ms for the full
-        # FRESH_MS + FADE_MS window so the alpha+color interpolation looks
-        # smooth instead of a single jump.
-        total_ms = int(self.FRESH_MS + self.FADE_MS) + 80
-        for delay in range(60, total_ms, 60):
+        # Drive both the typewriter reveal AND the fade animation: repaint
+        # every 40ms (~25 fps) for the full typewriter + FRESH + FADE window.
+        # Faster cadence (40ms vs 60ms) gives a smoother per-character reveal.
+        typewriter_ms = int(max(60.0, len(text) * self.TYPE_DELAY_MS))
+        total_ms = typewriter_ms + int(self.FRESH_MS + self.FADE_MS) + 80
+        for delay in range(40, total_ms, 40):
             QTimer.singleShot(delay, self._render)
 
     def set_preview(self, text: str) -> None:

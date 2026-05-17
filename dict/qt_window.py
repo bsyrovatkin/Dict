@@ -164,6 +164,13 @@ class RecordWidget(QWidget):
         self._last_ping_ms: float = -1e9
         self._particles: list[dict] = []    # tiny flickering data dots
 
+        # --- Recording extras (Fix 3): denser visible motion in REC state.
+        # Crimson signal particles inside the ring and short cyan "tick fires"
+        # tangent to the outer reticle (random sensor blips).
+        self._rec_particles: list[dict] = []
+        self._blips: list[dict] = []
+        self._last_blip_ms: float = -1e9
+
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(33)  # ~30 fps
@@ -236,6 +243,31 @@ class RecordWidget(QWidget):
                 # After-glow: remember the time when a segment crossed 0.7
                 if self._vu[i] > 0.7:
                     self._afterglow[i] = self._t_ms
+            # --- Crimson signal particles (Fix 3): up to 6 alive at once ---
+            if len(self._rec_particles) < 6:
+                import random as _r
+                self._rec_particles.append({
+                    "x": _r.uniform(-72.0, 72.0),
+                    "y": _r.uniform(-72.0, 72.0),
+                    "start": self._t_ms,
+                    "life": _r.uniform(400.0, 700.0),
+                })
+            self._rec_particles = [
+                pt for pt in self._rec_particles
+                if self._t_ms - pt["start"] < pt["life"]
+            ]
+            # --- Tick-fire sensor blips (Fix 3): spawn ~3/sec, lifetime ~200ms
+            if self._t_ms - self._last_blip_ms > 300.0:
+                import random as _r
+                self._blips.append({
+                    "angle": _r.uniform(0.0, 360.0),
+                    "start": self._t_ms,
+                    "life": 200.0,
+                })
+                self._last_blip_ms = self._t_ms
+            self._blips = [
+                b for b in self._blips if self._t_ms - b["start"] < b["life"]
+            ]
         elif state in ("busy", "transcribing", "decoding"):
             for i in range(self.VU_SEGMENTS):
                 self._vu[i] += (0.08 - self._vu[i]) * 0.2
@@ -268,6 +300,11 @@ class RecordWidget(QWidget):
                 self._pings.clear()
             if self._particles:
                 self._particles.clear()
+            # Clear REC-specific extras (Fix 3) when leaving REC.
+            if self._rec_particles:
+                self._rec_particles.clear()
+            if self._blips:
+                self._blips.clear()
 
         # Peak tracker with slow decay
         max_i = 0
@@ -357,6 +394,91 @@ class RecordWidget(QWidget):
             r2 = 120
             p.drawLine(QPointF(cx + math.cos(a) * r1, cy + math.sin(a) * r1),
                        QPointF(cx + math.cos(a) * r2, cy + math.sin(a) * r2))
+
+        # 4b) Recording extras (Fix 3): outer "bounce sticks", inner EQ ring,
+        # crimson signal particles, and random cyan tick-fire blips. These
+        # add visible motion variety so the REC state reads as obviously busy.
+        if state in ("recording", "rec"):
+            from dict.qt_design import CRIMSON, CRIMSON_DEEP
+
+            crimson = QColor(CRIMSON)
+
+            # (a) 8 radial "bounce sticks" outside the cardinal ticks.
+            for i, angle_deg in enumerate(
+                [0, 45, 90, 135, 180, 225, 270, 315]
+            ):
+                phase = t * (3.0 + 0.4 * i) + i * 0.7
+                env = max(0.10, self._level) * (0.5 + 0.5 * math.sin(phase))
+                bar_len = 8.0 + 18.0 * env
+                a = math.radians(angle_deg - 90)
+                r0 = 178.0
+                r1 = r0 + bar_len
+                c = QColor(crimson)
+                c.setAlphaF(min(1.0, 0.5 + 0.5 * env))
+                pen_b = QPen(c)
+                pen_b.setWidthF(3.0)
+                pen_b.setCapStyle(Qt.RoundCap)
+                p.setPen(pen_b)
+                p.drawLine(
+                    QPointF(cx + math.cos(a) * r0, cy + math.sin(a) * r0),
+                    QPointF(cx + math.cos(a) * r1, cy + math.sin(a) * r1),
+                )
+
+            # (b) Inner equalizer ring — 36 thin fast bars at r~68..76.
+            inner_segs = 36
+            for i in range(inner_segs):
+                c_deg = i * (360.0 / inner_segs)
+                a_mid = math.radians(c_deg - 90)
+                phase2 = t * (8.0 + math.sin(i * 0.5)) + i * 0.31
+                env2 = max(0.0, self._level) * (0.3 + 0.7 * abs(math.sin(phase2)))
+                bar_len = 1.0 + 7.0 * env2
+                r1_in = 68.0
+                r2_in = 68.0 + bar_len
+                col_in = QColor(CRIMSON_DEEP) if env2 <= 0.7 else QColor(crimson)
+                pen_i = QPen(col_in)
+                pen_i.setWidthF(1.4)
+                pen_i.setCapStyle(Qt.RoundCap)
+                p.setPen(pen_i)
+                p.drawLine(
+                    QPointF(cx + math.cos(a_mid) * r1_in,
+                            cy + math.sin(a_mid) * r1_in),
+                    QPointF(cx + math.cos(a_mid) * r2_in,
+                            cy + math.sin(a_mid) * r2_in),
+                )
+
+            # (c) Crimson signal particles flickering inside the ring.
+            for pt in self._rec_particles:
+                age_p = self._t_ms - pt["start"]
+                k_p = age_p / max(1.0, pt["life"])
+                # Triangle envelope (fade-in then fade-out)
+                env_p = 1.0 - abs(2.0 * k_p - 1.0)
+                env_p = max(0.0, min(1.0, env_p))
+                pcol = QColor(crimson)
+                pcol.setAlphaF(0.70 * env_p)
+                p.setBrush(QBrush(pcol))
+                p.setPen(Qt.NoPen)
+                r_pt = 1.5 + 1.0 * env_p
+                p.drawEllipse(QPointF(cx + pt["x"], cy + pt["y"]),
+                              r_pt, r_pt)
+
+            # (d) Cyan tick-fire blips tangent to the outer reticle.
+            for b in self._blips:
+                k_b = (self._t_ms - b["start"]) / max(1.0, b["life"])
+                a_b = math.radians(b["angle"] - 90)
+                r1_b = 174.0
+                r2_b = 174.0 + 4.0 + 4.0 * (1.0 - k_b)
+                cc = QColor("#ff7080")
+                cc.setAlphaF(max(0.0, 1.0 - k_b))
+                pen_blip = QPen(cc)
+                pen_blip.setWidthF(2.0)
+                pen_blip.setCapStyle(Qt.RoundCap)
+                p.setPen(pen_blip)
+                p.drawLine(
+                    QPointF(cx + math.cos(a_b) * r1_b,
+                            cy + math.sin(a_b) * r1_b),
+                    QPointF(cx + math.cos(a_b) * r2_b,
+                            cy + math.sin(a_b) * r2_b),
+                )
 
         # 5) Radar sweep (idle only) — conic gradient, annulus 72..118
         if state == "idle":
@@ -1142,6 +1264,7 @@ class MainWindow(QWidget):
     partial_appended_signal = Signal(str)
     partials_cleared_signal = Signal()
     preview_set_signal = Signal(str)
+    always_on_top_signal = Signal(bool)
 
     def __init__(
         self,
@@ -1193,6 +1316,7 @@ class MainWindow(QWidget):
         self.partial_appended_signal.connect(self._apply_partial_appended)
         self.partials_cleared_signal.connect(self._apply_partials_cleared)
         self.preview_set_signal.connect(self._apply_preview_set)
+        self.always_on_top_signal.connect(self._apply_always_on_top)
 
     # ---- UI construction ----
 
@@ -1376,3 +1500,24 @@ class MainWindow(QWidget):
         """Thread-safe: routes a preview update through Qt's signal queue
         so the GUI is touched only from the Qt main thread."""
         self.preview_set_signal.emit(text)
+
+    def set_always_on_top(self, on: bool) -> None:
+        """Thread-safe: toggle the Qt.WindowStaysOnTopHint flag at runtime."""
+        self.always_on_top_signal.emit(bool(on))
+
+    def _apply_always_on_top(self, on: bool) -> None:
+        """Toggle WindowStaysOnTopHint at runtime.
+
+        Qt requires hiding the window briefly to re-apply window flags; we
+        then re-show without activating to preserve the no-focus-steal
+        invariant (WA_ShowWithoutActivating handles that).
+        """
+        current = bool(self.windowFlags() & Qt.WindowStaysOnTopHint)
+        if current == bool(on):
+            return
+        was_visible = self.isVisible()
+        # setWindowFlag preserves the other flags (FramelessWindowHint, Tool)
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, bool(on))
+        if was_visible:
+            # WA_ShowWithoutActivating means show() does not steal focus.
+            self.show()
