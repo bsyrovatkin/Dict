@@ -171,6 +171,11 @@ class RecordWidget(QWidget):
         self._blips: list[dict] = []
         self._last_blip_ms: float = -1e9
 
+        # --- State transition (smooth cross-fade between idle/rec/decoding) -
+        self._prev_state: str = self._state
+        self._state_change_ms: float = 0.0
+        self._STATE_FADE_MS = 320.0
+
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(33)  # ~30 fps
@@ -178,7 +183,58 @@ class RecordWidget(QWidget):
     # ---- public API (unchanged) ----
 
     def set_state(self, state: str) -> None:
+        if state != self._state:
+            self._prev_state = self._state
+            self._state_change_ms = self._t_ms
         self._state = state
+
+    # ---- state-transition blend helper ----
+    def _state_blend(self) -> tuple[str, str, float]:
+        """Return (prev_state, new_state, t) where t in [0,1] is the
+        progress of the current crossfade. Once t reaches 1, prev is
+        collapsed to new so subsequent paints skip interpolation."""
+        if self._prev_state == self._state:
+            return self._state, self._state, 1.0
+        age = self._t_ms - self._state_change_ms
+        if age >= self._STATE_FADE_MS:
+            self._prev_state = self._state
+            return self._state, self._state, 1.0
+        t = max(0.0, min(1.0, age / self._STATE_FADE_MS))
+        # Ease-out cubic: starts fast, settles gently
+        t_eased = 1.0 - (1.0 - t) ** 3
+        return self._prev_state, self._state, t_eased
+
+    @staticmethod
+    def _lerp_color(a: QColor, b: QColor, t: float) -> QColor:
+        return QColor(
+            int(a.red()   * (1.0 - t) + b.red()   * t),
+            int(a.green() * (1.0 - t) + b.green() * t),
+            int(a.blue()  * (1.0 - t) + b.blue()  * t),
+            int(a.alpha() * (1.0 - t) + b.alpha() * t),
+        )
+
+    def _lerp_palette(self, t: float) -> dict:
+        """Interpolated palette dict between prev_state and new_state."""
+        pp = self._state_palette(self._prev_state)
+        np = self._state_palette(self._state)
+        if t >= 1.0:
+            return np
+        if t <= 0.0:
+            return pp
+        return {k: self._lerp_color(pp[k], np[k], t) for k in pp}
+
+    @staticmethod
+    def _amount(prev: str, new: str, t: float, names: tuple[str, ...]) -> float:
+        """Continuous 0..1 weight of a named state during the crossfade.
+        Used for things like REC pulse ring or DECODING sonar pings that
+        should fade in/out rather than snap."""
+        prev_in = prev in names
+        new_in = new in names
+        if prev_in and new_in:
+            return 1.0
+        if not prev_in and not new_in:
+            return 0.0
+        return t if new_in else (1.0 - t)
 
     def set_level(self, level: float) -> None:
         self._level_target = max(0.0, min(1.0, level))
@@ -336,8 +392,17 @@ class RecordWidget(QWidget):
 
         cx = 180.0
         cy = 180.0
-        col = self._state_palette(self._state)
-        state = self._state
+        # Interpolate palette + state-weights for smooth crossfade between
+        # idle / rec / decoding instead of the old snap-on-state-change.
+        prev_state, new_state, fade_t = self._state_blend()
+        col = self._lerp_palette(fade_t)
+        # `state` is the destination — single-state branches below still gate
+        # on it, but their visible weight is scaled by *_amount so they fade
+        # in/out smoothly across the transition window.
+        state = new_state
+        rec_amount = self._amount(prev_state, new_state, fade_t, ("recording", "rec"))
+        dec_amount = self._amount(prev_state, new_state, fade_t, ("busy", "transcribing", "decoding"))
+        idle_amount = self._amount(prev_state, new_state, fade_t, ("idle", "loading", "error"))
         # Seconds clock — used by the decoding / idle / rec branches below.
         t = self._t_ms / 1000.0
 
@@ -500,8 +565,9 @@ class RecordWidget(QWidget):
             p.setBrush(QBrush(grad))
             p.drawPath(annulus)
 
-        # 6) Decoding multi-arc spinner + sonar pings (busy/transcribing only)
-        if state in ("busy", "transcribing", "decoding"):
+        # 6) Decoding multi-arc spinner + sonar pings — DEC-weighted so they
+        # fade in/out smoothly during state transitions.
+        if dec_amount > 0.001:
             # Be explicit about composition mode here so any earlier paint
             # operation can't leave us in a mode that erases what we draw.
             from PySide6.QtGui import QPainter as _QP
@@ -523,8 +589,8 @@ class RecordWidget(QWidget):
 
             # --- Unmistakable amber backdrop fill so the user sees the state
             # change immediately even before the arcs spin in. Faint ring fill
-            # at r=120 with ~10% amber alpha.
-            backdrop_col = QColor(hi.red(), hi.green(), hi.blue(), 28)
+            # at r=120 with ~10% amber alpha (scaled by dec_amount).
+            backdrop_col = QColor(hi.red(), hi.green(), hi.blue(), int(28 * dec_amount))
             p.setBrush(QBrush(backdrop_col)); p.setPen(Qt.NoPen)
             p.drawEllipse(QPointF(cx, cy), 120.0, 120.0)
 
@@ -534,21 +600,17 @@ class RecordWidget(QWidget):
                 k = age / 1600.0
                 if 0.0 <= k <= 1.0:
                     r_ping = 58.0 + (170.0 - 58.0) * k
-                    alpha = int(235.0 * (1.0 - k) * (0.4 + 0.6 * min(1.0, k * 2.5)))
+                    alpha = int(235.0 * (1.0 - k) * (0.4 + 0.6 * min(1.0, k * 2.5)) * dec_amount)
                     pc = QColor(mix_hi.red(), mix_hi.green(), mix_hi.blue(), max(0, alpha))
                     pen_p = QPen(pc); pen_p.setWidthF(2.8); pen_p.setCapStyle(Qt.RoundCap)
                     p.setPen(pen_p); p.setBrush(Qt.NoBrush)
                     p.drawEllipse(QPointF(cx, cy), r_ping, r_ping)
 
-            # --- Multi-arc spinner: three short arcs, different radii/speed/dir ---
-            # Widened arc spans + much thicker, fully-opaque strokes so the
-            # spinner is unmistakable even at a glance. Previous 1.6–2.6px
-            # widths at partial alpha were invisible in the screenshot the
-            # user shared.
+            # --- Multi-arc spinner: three short arcs at scaled alpha (dec_amount)
             specs = (
-                (110.0, +2.4, 0.55 * math.pi, 0.00, QColor(hi.red(), hi.green(), hi.blue(), 255),     4.0),  # outer, bright
-                ( 95.0, -1.6, 0.55 * math.pi, 1.10, QColor(mix_hi.red(), mix_hi.green(), mix_hi.blue(), 220), 3.4),  # middle, drifty
-                ( 80.0, +1.1, 0.45 * math.pi, 2.20, mix_ink, 3.0),  # inner, soft but visible
+                (110.0, +2.4, 0.55 * math.pi, 0.00, QColor(hi.red(), hi.green(), hi.blue(), int(255 * dec_amount)),     4.0),
+                ( 95.0, -1.6, 0.55 * math.pi, 1.10, QColor(mix_hi.red(), mix_hi.green(), mix_hi.blue(), int(220 * dec_amount)), 3.4),
+                ( 80.0, +1.1, 0.45 * math.pi, 2.20, QColor(mix_ink.red(), mix_ink.green(), mix_ink.blue(), int(mix_ink.alpha() * dec_amount)), 3.0),
             )
             for r_arc, omega, span_rad, phase0, color, width in specs:
                 a0 = (t * omega + phase0) % (2 * math.pi)
@@ -563,7 +625,7 @@ class RecordWidget(QWidget):
             beam_a = (t * 2.0) % (2 * math.pi)
             beam_dx = math.cos(beam_a - math.pi / 2) * 110.0
             beam_dy = math.sin(beam_a - math.pi / 2) * 110.0
-            beam_col = QColor(hi.red(), hi.green(), hi.blue(), 200)
+            beam_col = QColor(hi.red(), hi.green(), hi.blue(), int(200 * dec_amount))
             pen_beam = QPen(beam_col); pen_beam.setWidthF(2.0); pen_beam.setCapStyle(Qt.RoundCap)
             p.setPen(pen_beam); p.setBrush(Qt.NoBrush)
             p.drawLine(QPointF(cx, cy), QPointF(cx + beam_dx, cy + beam_dy))
@@ -647,96 +709,85 @@ class RecordWidget(QWidget):
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(QPointF(cx, cy), core_r, core_r)
 
-        # 10) Pulse ring (rec only) — original core pulse plus a HUGE outer
-        # breathing ring at r~128 so REC state is visually unmistakable from idle.
-        if state in ("recording", "rec"):
+        # 10) Pulse ring + outer breathing ring — REC-weighted so they fade in
+        # and out smoothly during state transitions.
+        if rec_amount > 0.001:
             pulse = (math.sin(self._pulse_phase) + 1.0) / 2.0
             from dict.qt_design import CRIMSON
             pc = QColor(CRIMSON)
-            pc.setAlphaF(min(1.0, 0.18 + 0.22 * pulse))
-            pen = QPen(pc)
-            pen.setWidthF(1.0)
-            p.setPen(pen)
-            p.setBrush(Qt.NoBrush)
+            pc.setAlphaF(min(1.0, (0.18 + 0.22 * pulse) * rec_amount))
+            pen = QPen(pc); pen.setWidthF(1.0)
+            p.setPen(pen); p.setBrush(Qt.NoBrush)
             p.drawEllipse(QPointF(cx, cy), core_r + 6 + pulse * 6, core_r + 6 + pulse * 6)
-            # Outer breathing ring: fat 4px crimson at r=128 + 12*sin
             big_r = 128.0 + 12.0 * math.sin(self._pulse_phase)
             big_col = QColor(CRIMSON)
-            big_col.setAlphaF(min(1.0, 0.40 + 0.30 * pulse))
+            big_col.setAlphaF(min(1.0, (0.40 + 0.30 * pulse) * rec_amount))
             big_pen = QPen(big_col); big_pen.setWidthF(4.0); big_pen.setCapStyle(Qt.RoundCap)
             p.setPen(big_pen); p.setBrush(Qt.NoBrush)
             p.drawEllipse(QPointF(cx, cy), big_r, big_r)
 
-        # 11) Core glyph
-        if state == "idle" or state in ("loading", "error"):
-            # Play triangle (filled)
-            p.setBrush(QBrush(col["hi"]))
-            p.setPen(Qt.NoPen)
+        # 11) Core glyph — three layers drawn with alpha = state weight so
+        # idle/rec/decoding cross-fade smoothly during transitions (instead
+        # of snapping). Each glyph paints if its state-weight > 0.
+
+        # IDLE: play triangle
+        if idle_amount > 0.001:
+            tri_col = QColor(col["hi"]); tri_col.setAlphaF(min(1.0, idle_amount))
+            p.setBrush(QBrush(tri_col)); p.setPen(Qt.NoPen)
             path = QPainterPath()
             path.moveTo(cx - 10, cy - 14)
             path.lineTo(cx + 16, cy)
             path.lineTo(cx - 10, cy + 14)
             path.closeSubpath()
             p.drawPath(path)
-        elif state in ("recording", "rec"):
-            # Crimson radial-gradient halo behind the stop square so the core
-            # reads "active recording" at a glance.
+
+        # REC: crimson halo + bold white square
+        if rec_amount > 0.001:
             from PySide6.QtGui import QRadialGradient as _QRG
             from dict.qt_design import CRIMSON as _CR
             halo = _QRG(QPointF(cx, cy), 28.0)
-            hc = QColor(_CR); hc.setAlpha(180)
+            hc = QColor(_CR); hc.setAlpha(int(180 * rec_amount))
             halo.setColorAt(0.0, hc)
             halo.setColorAt(1.0, QColor(0, 0, 0, 0))
             p.setBrush(QBrush(halo)); p.setPen(Qt.NoPen)
             p.drawEllipse(QPointF(cx, cy), 28.0, 28.0)
-            # Bold white square (24x24, was 20x20)
-            p.setBrush(QBrush(QColor("#ffffff")))
-            p.setPen(Qt.NoPen)
+            sq_col = QColor("#ffffff"); sq_col.setAlphaF(min(1.0, rec_amount))
+            p.setBrush(QBrush(sq_col)); p.setPen(Qt.NoPen)
             p.drawRect(QRectF(cx - 12, cy - 12, 24, 24))
-        else:  # decoding — "brewing" core
-            # Speech / data particles flicker inside the inner annulus first
-            # so dots + ring sit on top.
+
+        # DECODING: particles + pulsing outer ring + amber core + orbiting dots
+        if dec_amount > 0.001:
             for pt in self._particles:
                 age = self._t_ms - pt["start"]
                 k = age / max(1.0, pt["life"])
-                # Fade-in/out triangle envelope
-                env = 1.0 - abs(2.0 * k - 1.0)
-                env = max(0.0, min(1.0, env))
+                env = max(0.0, min(1.0, 1.0 - abs(2.0 * k - 1.0)))
                 pcol = QColor(col["hi"])
-                pcol.setAlphaF(0.65 * env)
-                p.setBrush(QBrush(pcol))
-                p.setPen(Qt.NoPen)
-                # Particle size 2.0..3.0 px (was 0.9..1.6 — much more visible)
+                pcol.setAlphaF(0.65 * env * dec_amount)
+                p.setBrush(QBrush(pcol)); p.setPen(Qt.NoPen)
                 r_pt = 2.0 + 1.0 * env
                 p.drawEllipse(QPointF(cx + pt["x"], cy + pt["y"]), r_pt, r_pt)
 
-            # Pulsing outer ring — big and eye-catching (r=42 + 12*sin, was 22 + 8*sin)
             ring_pulse = (math.sin(t * 3.2) + 1.0) / 2.0
             outer_r = 42.0 + 12.0 * ring_pulse
             rc = QColor(col["hi"])
-            rc.setAlphaF(0.30 + 0.25 * (1.0 - ring_pulse))
+            rc.setAlphaF((0.30 + 0.25 * (1.0 - ring_pulse)) * dec_amount)
             pen_r = QPen(rc); pen_r.setWidthF(2.0)
             p.setPen(pen_r); p.setBrush(Qt.NoBrush)
             p.drawEllipse(QPointF(cx, cy), outer_r, outer_r)
 
-            # --- Unmissable amber center indicator ("the yellow ball") ---
-            # The previous tiny 3-dot pulse was easy to miss. A large solid
-            # amber circle in the dead center makes the decoding state obvious
-            # without competing with the orbiting/sonar elements.
             pulse_core = (math.sin(t * 2.4) + 1.0) / 2.0
             core_r = 9.0 + 5.0 * pulse_core
             core_col = QColor(col["hi"])
-            core_col.setAlphaF(0.85 + 0.15 * pulse_core)
+            core_col.setAlphaF((0.85 + 0.15 * pulse_core) * dec_amount)
             p.setBrush(QBrush(core_col)); p.setPen(Qt.NoPen)
             p.drawEllipse(QPointF(cx, cy), core_r, core_r)
 
-            # --- Three dots orbiting around the central core ---
             for i in range(3):
                 orbit_a = t * 1.6 + (i * 2 * math.pi / 3)
                 ox = cx + math.cos(orbit_a) * 22.0
                 oy = cy + math.sin(orbit_a) * 22.0
-                p.setBrush(QBrush(col["hi"]))
-                p.setPen(Qt.NoPen)
+                dc = QColor(col["hi"]); dc.setAlphaF(dec_amount)
+                p.setBrush(QBrush(dc)); p.setPen(Qt.NoPen)
                 p.drawEllipse(QPointF(ox, oy), 3.2, 3.2)
 
         # 12) Center crosshair (tiny +)
