@@ -654,7 +654,10 @@ class RecordWidget(QWidget):
         gap_deg = 1.8 if seg >= 72 else 2.4
         seg_deg = (360.0 / seg) - gap_deg
         base_r = 84.0
-        max_h = 45.0  # was 38 — REC equalizer pops more
+        # BIG amplitude: bars grow from inner ring (r=84) crossing the
+        # middle dotted ring (r=120) and reaching almost to the outer
+        # dotted ring (r=165) at peak. Total radial range of motion ~80px.
+        max_h = 90.0
         for i in range(seg):
             v = max(0.0, min(1.0, self._vu[i]))
             h = 2.0 + v * max_h
@@ -668,16 +671,23 @@ class RecordWidget(QWidget):
                 # Afterglow: any segment that crossed 0.7 in the last 200ms
                 # stays bright until the timer expires.
                 glowing = (self._t_ms - self._afterglow[i]) < 200.0
-                if v > 0.85:
+                # White-cap (clip) only when we're fully into REC state —
+                # otherwise the transition flashes bright white as the VU
+                # envelope ramps up and many segments cross 0.85 at once.
+                if v > 0.85 and rec_amount > 0.9:
                     c = QColor("#ffffff")
                 elif glowing or v > 0.55:
                     c = col["hi"]
                 else:
                     c = col["mid"]
-            # Stroke width approximates arc segment width (cap removed)
-            # JSX computes width based on circumference; reproduce conservatively.
-            stroke_w = max(2.0, (2.0 * math.pi * r_mid) / seg - gap_deg * math.pi / 180.0 * r_mid)
-            stroke_w = max(2.0, stroke_w * 0.9)
+            # During state crossfade, scale bar alpha by rec/idle weight so
+            # the equalizer fades in/out instead of snapping.
+            if state in ("recording", "rec"):
+                a = QColor(c); a.setAlphaF(min(1.0, c.alphaF() * rec_amount))
+                c = a
+            # Stroke width: chunkier so bars read at all amplitudes (×1.6).
+            stroke_w = max(2.6, (2.0 * math.pi * r_mid) / seg - gap_deg * math.pi / 180.0 * r_mid)
+            stroke_w = max(2.6, stroke_w * 1.6)
             pen = QPen(c)
             pen.setWidthF(stroke_w)
             pen.setCapStyle(Qt.FlatCap)
