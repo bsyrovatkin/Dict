@@ -16,5 +16,7 @@ render-*.png
 window-*.png
 screen-*.png
 design-*.png
+cmp-*.png
 render_widget_states.py
 render_window_states.py
+_render_snapshots.py

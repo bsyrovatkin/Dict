@@ -406,31 +406,38 @@ class RecordWidget(QWidget):
         # Seconds clock — used by the decoding / idle / rec branches below.
         t = self._t_ms / 1000.0
 
-        # 1) Outer cardinal ticks (N/E/S/W from r=160 to r=174)
+        # 1) Outer cardinal ticks (N/E/S/W from r=150 to r=164) — shrunk
+        # to fit inside the 170x170 visible widget bounds (was 160..174).
         pen = QPen(LINE_MID)
         pen.setWidthF(1.0)
         pen.setCosmetic(False)
         p.setPen(pen)
         for ang_deg in (0, 90, 180, 270):
             a = math.radians(ang_deg - 90)
-            r1 = self.R_OUT - 10
-            r2 = self.R_OUT + 4
+            r1 = self.R_OUT - 20  # 150
+            r2 = self.R_OUT - 6   # 164
             p.drawLine(QPointF(cx + math.cos(a) * r1, cy + math.sin(a) * r1),
                        QPointF(cx + math.cos(a) * r2, cy + math.sin(a) * r2))
 
-        # 1b) Bold state-color border ring at r=174 (non-idle only).
+        # 1b) Bold state-color border ring (non-idle only). Shrunk from
+        # r=174 to r=162 so it sits inside the visible widget area.
         # Forces the user to see the widget is alive in this state.
         if state != "idle" and state != "loading":
             ring_col = QColor(col["hi"]); ring_col.setAlpha(200)
             ring_pen = QPen(ring_col); ring_pen.setWidthF(3.0); ring_pen.setCapStyle(Qt.RoundCap)
             p.setPen(ring_pen); p.setBrush(Qt.NoBrush)
-            p.drawEllipse(QPointF(cx, cy), 174.0, 174.0)
+            p.drawEllipse(QPointF(cx, cy), 162.0, 162.0)
 
-        # 2) Corner brackets at BR=178, inset 68% from center
+        # 2) Corner brackets pulled inside the visible widget area.
+        # Was BR = R_OUT + 8 = 178 (sat outside the 170x170 bounds and got
+        # clipped). Now BR = R_OUT - 6 = 164, inset 68% from center, so the
+        # L-bracket corner lands at ~111 internal (~52px display) and arms
+        # extend further OUT to ~125 internal (~59px display) — well inside
+        # the 85px display-half.
         pen = QPen(col["ink"])
         pen.setWidthF(1.0)
         p.setPen(pen)
-        BR = self.R_OUT + 8
+        BR = self.R_OUT - 6  # 164
         bracket_len = 14
         for qx, qy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
             ox = cx + qx * BR * 0.68
@@ -438,16 +445,18 @@ class RecordWidget(QWidget):
             p.drawLine(QPointF(ox + qx * bracket_len, oy), QPointF(ox, oy))
             p.drawLine(QPointF(ox, oy), QPointF(ox, oy + qy * bracket_len))
 
-        # 3) 3 concentric dotted rings
-        pen = QPen(LINE_DIM)
+        # 3) 3 concentric dotted rings — bumped alpha so they read on dark bg
+        # (was LINE_DIM ~30/255 — nearly invisible at the 0.472 down-scale).
+        ring_col = QColor(138, 149, 172, 90)
+        pen = QPen(ring_col)
         pen.setWidthF(1.0)
         pen.setDashPattern([1.0, 3.0])
         p.setPen(pen)
         p.setBrush(Qt.NoBrush)
-        for r in (165, 140, 120):
+        for r in (155, 135, 115):
             p.drawEllipse(QPointF(cx, cy), r, r)
 
-        # 4) Degree ticks every 15 degrees on inner ring (r=120)
+        # 4) Degree ticks every 15 degrees on inner dotted ring (r=115)
         pen = QPen(QColor(138, 149, 172, int(0.35 * 255)))
         pen.setWidthF(1.0)
         pen.setDashPattern([])  # solid
@@ -455,8 +464,8 @@ class RecordWidget(QWidget):
         for deg in range(0, 360, 15):
             a = math.radians(deg - 90)
             major = (deg % 45) == 0
-            r1 = 120 - (6 if major else 3)
-            r2 = 120
+            r1 = 115 - (6 if major else 3)
+            r2 = 115
             p.drawLine(QPointF(cx + math.cos(a) * r1, cy + math.sin(a) * r1),
                        QPointF(cx + math.cos(a) * r2, cy + math.sin(a) * r2))
 
@@ -468,20 +477,24 @@ class RecordWidget(QWidget):
 
             crimson = QColor(CRIMSON)
 
-            # (a) 8 radial "bounce sticks" outside the cardinal ticks.
+            # (a) 8 radial "bounce sticks" between the diagonals — now pulled
+            # inward (was r=178..204, outside the visible 170-internal widget)
+            # so they sit between the middle/outer dotted rings (r=135..155)
+            # and grow further inward when active. Skipped on cardinal angles
+            # so they don't overlap the outer ticks.
             for i, angle_deg in enumerate(
-                [0, 45, 90, 135, 180, 225, 270, 315]
+                [22, 67, 112, 157, 202, 247, 292, 337]
             ):
                 phase = t * (3.0 + 0.4 * i) + i * 0.7
                 env = max(0.10, self._level) * (0.5 + 0.5 * math.sin(phase))
-                bar_len = 8.0 + 18.0 * env
+                bar_len = 6.0 + 12.0 * env
                 a = math.radians(angle_deg - 90)
-                r0 = 178.0
+                r0 = 140.0
                 r1 = r0 + bar_len
                 c = QColor(crimson)
                 c.setAlphaF(min(1.0, 0.5 + 0.5 * env))
                 pen_b = QPen(c)
-                pen_b.setWidthF(3.0)
+                pen_b.setWidthF(2.4)
                 pen_b.setCapStyle(Qt.RoundCap)
                 p.setPen(pen_b)
                 p.drawLine(
@@ -526,12 +539,13 @@ class RecordWidget(QWidget):
                 p.drawEllipse(QPointF(cx + pt["x"], cy + pt["y"]),
                               r_pt, r_pt)
 
-            # (d) Cyan tick-fire blips tangent to the outer reticle.
+            # (d) Cyan tick-fire blips tangent to the outer reticle — pulled
+            # inward to r=156..164 (was 174..182, outside the visible widget).
             for b in self._blips:
                 k_b = (self._t_ms - b["start"]) / max(1.0, b["life"])
                 a_b = math.radians(b["angle"] - 90)
-                r1_b = 174.0
-                r2_b = 174.0 + 4.0 + 4.0 * (1.0 - k_b)
+                r1_b = 156.0
+                r2_b = 156.0 + 4.0 + 4.0 * (1.0 - k_b)
                 cc = QColor("#ff7080")
                 cc.setAlphaF(max(0.0, 1.0 - k_b))
                 pen_blip = QPen(cc)
@@ -649,15 +663,15 @@ class RecordWidget(QWidget):
             p.setPen(pen_beam); p.setBrush(Qt.NoBrush)
             p.drawLine(QPointF(cx, cy), QPointF(cx + beam_dx, cy + beam_dy))
 
-        # 7) VU ring: 54 segments between r=84 and r=110
+        # 7) VU ring: 54 segments — bars span r=72 .. r=154 at peak so they
+        # cross the middle dotted ring (r=135) and reach the outer dotted
+        # ring (r=155). Tuned for the shrunk geometry (widget visible 170px,
+        # outer ticks at r=150..164, dotted rings at 115/135/155).
         seg = self.VU_SEGMENTS
         gap_deg = 1.8 if seg >= 72 else 2.4
         seg_deg = (360.0 / seg) - gap_deg
-        base_r = 84.0
-        # BIG amplitude: bars grow from inner ring (r=84) crossing the
-        # middle dotted ring (r=120) and reaching almost to the outer
-        # dotted ring (r=165) at peak. Total radial range of motion ~80px.
-        max_h = 90.0
+        base_r = 72.0
+        max_h = 82.0
         for i in range(seg):
             v = max(0.0, min(1.0, self._vu[i]))
             h = 2.0 + v * max_h
@@ -770,19 +784,21 @@ class RecordWidget(QWidget):
             path.closeSubpath()
             p.drawPath(path)
 
-        # REC: crimson halo + bold white square
+        # REC: crimson halo + bold white square — bumped from 24x24 internal
+        # (~11px display) to 32x32 (~15px display) so the stop glyph reads
+        # at the shrunk widget size. Halo radius bumped 28 → 36 to match.
         if rec_amount > 0.001:
             from PySide6.QtGui import QRadialGradient as _QRG
             from dict.qt_design import CRIMSON as _CR
-            halo = _QRG(QPointF(cx, cy), 28.0)
+            halo = _QRG(QPointF(cx, cy), 36.0)
             hc = QColor(_CR); hc.setAlpha(int(180 * rec_amount))
             halo.setColorAt(0.0, hc)
             halo.setColorAt(1.0, QColor(0, 0, 0, 0))
             p.setBrush(QBrush(halo)); p.setPen(Qt.NoPen)
-            p.drawEllipse(QPointF(cx, cy), 28.0, 28.0)
+            p.drawEllipse(QPointF(cx, cy), 36.0, 36.0)
             sq_col = QColor("#ffffff"); sq_col.setAlphaF(min(1.0, rec_amount))
             p.setBrush(QBrush(sq_col)); p.setPen(Qt.NoPen)
-            p.drawRect(QRectF(cx - 12, cy - 12, 24, 24))
+            p.drawRect(QRectF(cx - 16, cy - 16, 32, 32))
 
         # DECODING: particles + pulsing outer ring + amber core + orbiting dots
         if dec_amount > 0.001:
