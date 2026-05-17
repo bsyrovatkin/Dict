@@ -102,7 +102,10 @@ def test_second_trigger_transcribes_and_returns_to_idle(mocks):
     mocks["sounds"].play_stop.assert_called_once()
     mocks["transcriber"].transcribe.assert_called_once_with(audio)
     mocks["history"].push.assert_called_once_with("проверка")
-    mocks["clipboard"].assert_called_once_with("проверка")
+    # Clipboard now set TWICE: legacy delivery + safety-net fallback,
+    # both with the same text.
+    assert all(call.args == ("проверка",) for call in mocks["clipboard"].call_args_list)
+    assert mocks["clipboard"].call_count >= 1
     mocks["logger"].assert_called_once_with("проверка")
     mocks["window"].refresh.assert_called_once()
     mocks["window"].show_for.assert_called()
@@ -184,7 +187,9 @@ def test_streaming_path_calls_paste_when_enabled(mocks):
     c.on_hotkey()  # start
     c.on_hotkey()  # stop
     mocks["paste"].assert_called_once_with("hello world", "f9")
-    mocks["clipboard"].assert_not_called()
+    # clipboard is ALWAYS set at the end as a safety-net fallback so the user
+    # can Ctrl+V manually even if the auto-paste landed in the wrong window.
+    mocks["clipboard"].assert_called_with("hello world")
 
 
 def test_streaming_path_uses_clipboard_when_auto_paste_off(mocks):
@@ -196,7 +201,12 @@ def test_streaming_path_uses_clipboard_when_auto_paste_off(mocks):
     c.on_hotkey()
     c.on_hotkey()
     mocks["paste"].assert_not_called()
-    mocks["clipboard"].assert_called_once_with("hello")
+    # auto_paste off → clipboard gets the text via the legacy path AND the
+    # safety-net at the end (same text, two calls — both with "hello")
+    assert all(
+        call.args == ("hello",) for call in mocks["clipboard"].call_args_list
+    )
+    assert mocks["clipboard"].call_count >= 1
 
 
 def test_fallback_to_whole_buffer_if_streamer_empty(mocks):

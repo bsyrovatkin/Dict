@@ -858,8 +858,7 @@ class SettingsDialog(QDialog):
 
         h.addStretch()
 
-        # × close button — saves AND closes (most users expect this).
-        # ESC still discards via QDialog's default key binding.
+        # × close button — discards (use APPLY to save).
         close_btn = QPushButton("×")
         close_btn.setFixedSize(24, 20)
         close_btn.setCursor(Qt.PointingHandCursor)
@@ -869,63 +868,20 @@ class SettingsDialog(QDialog):
             f"QPushButton {{ background: transparent; border: none; color: {TEXT_MID.name()}; }}"
             f"QPushButton:hover {{ color: {TEXT_HI.name()}; }}"
         )
-        close_btn.clicked.connect(self._save)
+        close_btn.clicked.connect(self.reject)
         h.addWidget(close_btn)
         return w
 
-    def closeEvent(self, ev) -> None:
-        """Window close (via OS close gesture / Alt+F4 etc.) also saves —
-        matches user expectation that 'closing' = 'keep my changes'."""
-        try:
-            self._save()
-        except Exception:
-            log.exception("_save on closeEvent failed; discarding")
-        ev.accept()
-
     def _build_body(self, layout: QVBoxLayout) -> None:
-        # §01 AUDIO
-        layout.addWidget(_SectionTitle("01", "AUDIO"))
-        layout.addSpacing(12)
+        mlf = QFont(FONT_MONO); mlf.setPointSize(8)
 
-        self._input_combo = _StyledCombo()
-        # Microphone selection isn't wired through Settings yet — show a single
-        # entry so the field renders but is read-only.
-        self._input_combo.addItems(["default (system input)"])
-        layout.addWidget(_Field("INPUT", self._input_combo))
-
-        self._gain_slider = _GainSlider(self._current.mic_gain)
-        layout.addWidget(_Field("MIC GAIN", self._gain_slider))
-
-        self._vol_slider = _LinearSlider(
-            self._current.volume, 0.0, 1.0, step=0.01,
-            formatter=lambda v: f"{int(round(v * 100))}%",
-        )
-        layout.addWidget(_Field("VOLUME", self._vol_slider, hint="playback"))
-
-        layout.addSpacing(16)
-
-        # §02 HOTKEY
-        layout.addWidget(_SectionTitle("02", "HOTKEY"))
+        # §01 HOTKEY
+        layout.addWidget(_SectionTitle("01", "HOTKEY"))
         layout.addSpacing(12)
 
         self._hotkey_input = _HotkeyInput(self._current.hotkey)
         self._hotkey_input.rebind_requested.connect(self._start_capture)
         layout.addWidget(_Field("TRIGGER", self._hotkey_input))
-
-        # Mode (cosmetic — push-to-talk not actually wired yet)
-        mode_row = QWidget()
-        mr = QHBoxLayout(mode_row)
-        mr.setContentsMargins(0, 0, 0, 0); mr.setSpacing(8)
-        self._mode_toggle = _Toggle(on=False)
-        self._mode_toggle.toggled.connect(self._on_mode_toggled)
-        mr.addWidget(self._mode_toggle)
-        self._mode_lbl = QLabel("toggle · tap")
-        mlf = QFont(FONT_MONO); mlf.setPointSize(8)
-        self._mode_lbl.setFont(mlf)
-        self._mode_lbl.setStyleSheet(f"color: {TEXT_DIM.name()};")
-        mr.addWidget(self._mode_lbl)
-        mr.addStretch()
-        layout.addWidget(_Field("MODE", mode_row))
 
         # Auto-paste — saves
         ap_row = QWidget()
@@ -939,12 +895,12 @@ class SettingsDialog(QDialog):
         self._ap_lbl.setStyleSheet(f"color: {TEXT_DIM.name()};")
         apr.addWidget(self._ap_lbl)
         apr.addStretch()
-        layout.addWidget(_Field("AUTO-PASTE", ap_row, hint="ctrl+v into focus"))
+        layout.addWidget(_Field("AUTO-PASTE", ap_row, hint="type into focus"))
 
         layout.addSpacing(16)
 
-        # §03 MODEL
-        layout.addWidget(_SectionTitle("03", "MODEL"))
+        # §02 MODEL
+        layout.addWidget(_SectionTitle("02", "MODEL"))
         layout.addSpacing(12)
 
         self._model_combo = _StyledCombo()
@@ -959,6 +915,14 @@ class SettingsDialog(QDialog):
         layout.addWidget(_Field("LANGUAGE", self._lang_combo))
 
         layout.addStretch(1)
+
+        # Removed (kept only as defaults in Settings, not editable in UI):
+        #   INPUT (mic combo)    — system default only for v1
+        #   MIC GAIN coefficient — didn't behave reliably on user's Windows mic
+        #   VOLUME slider        — playback volume of start/stop cues, rarely tuned
+        #   MODE toggle          — push-to-talk not implemented yet
+        # We still keep the underlying fields in Settings so settings.json roundtrips
+        # cleanly, but the user no longer sees / can edit them.
 
     def _build_footer(self) -> QWidget:
         w = QWidget()
@@ -1064,12 +1028,18 @@ class SettingsDialog(QDialog):
             hotkey=combo,
             model_size=self._model_combo.currentText(),
             language=lang_value,
-            volume=self._vol_slider.value(),
-            mic_gain=self._gain_slider.value(),
+            # Volume + mic_gain are no longer user-editable in the dialog —
+            # carry whatever was on disk through unchanged.
+            volume=self._current.volume,
+            mic_gain=self._current.mic_gain,
             auto_paste=self._auto_paste_toggle.is_on(),
         )
+        log.info("SettingsDialog._save: built %s", new.to_dict())
         try:
             self._on_save(new)
+            log.info("SettingsDialog._save: on_save returned cleanly")
+        except Exception:
+            log.exception("SettingsDialog._save: on_save raised — settings NOT persisted")
         finally:
             self.accept()
 

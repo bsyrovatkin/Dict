@@ -250,8 +250,7 @@ class Controller:
             if self._session_streamed:
                 # Chunks were already typed live into the focused field via
                 # handle_partial. Skip the bulk paste so we don't duplicate
-                # everything. The clipboard still holds the last pasted chunk;
-                # we leave it as-is.
+                # everything.
                 log.info("skipping bulk paste — text already streamed live")
             elif self._auto_paste:
                 try:
@@ -261,6 +260,15 @@ class Controller:
                     log.exception("paste failed; text is in clipboard for manual paste")
             else:
                 self._clipboard_set(text)
+            # ALWAYS write the final full text to the clipboard at the end
+            # of every session, regardless of streaming/paste path. Acts as a
+            # safety net: if streaming-paste missed (focus lost, target app
+            # didn't accept keystrokes), user can Ctrl+V manually to recover.
+            try:
+                if self._clipboard_set(text):
+                    log.info("final text (%d chars) parked in clipboard as fallback", len(text))
+            except Exception:
+                log.exception("final clipboard.set_text failed (non-fatal)")
             self._window.refresh()
             self._window.show_for(self._auto_show_seconds)
             # Intentionally NOT clearing partials here — the user wants the
