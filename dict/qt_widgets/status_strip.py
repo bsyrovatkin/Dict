@@ -228,22 +228,13 @@ class StatusStrip(QWidget):
         self._level_meter.set_state(state)
         self.update()  # repaint top-tinted background gradient
 
-    def paintEvent(self, ev) -> None:
-        """Subtle state-tinted gradient at the top of the strip (5% alpha,
-        fades to transparent at the bottom). Mirrors app.jsx wrapper
-        `background: linear-gradient(180deg, color-mix(in oklab, ${stateColor} 5%, transparent) 0%, transparent 100%)`.
-        Painted as a wide top halo, no harsh edge."""
-        from PySide6.QtGui import QLinearGradient, QBrush
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing, False)
-        r = self.rect()
-        col = state_color(self._state)
-        tint = QColor(col); tint.setAlpha(int(0.06 * 255))
-        grad = QLinearGradient(0, 0, 0, r.height())
-        grad.setColorAt(0.0, tint)
-        grad.setColorAt(1.0, QColor(0, 0, 0, 0))
-        p.fillRect(r, QBrush(grad))
-        super().paintEvent(ev)
+    # NB: the previous paintEvent painted a top-down state-tinted gradient on
+    # this widget. User pushback: «1 градиент не во всю ширину области с
+    # анимацией все еще есть подчеркивания лишние под цифрами и под
+    # дицебелами». The gradient was only on the right-hand column (where the
+    # status strip sits), and the band where it faded out near each row got
+    # misread as an underline under the values. Removed entirely — the outer
+    # window glow now carries the state-tinted accent.
 
     def set_level(self, level: float) -> None:
         self._level_meter.set_level(level)

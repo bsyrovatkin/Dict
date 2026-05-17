@@ -1395,6 +1395,14 @@ class _PanelWidget(QWidget):
             self._fade_start_ms = None
             self._fade_timer.stop()
         self.update()
+        # Also trigger the parent MainWindow repaint so the outer glow ring
+        # crossfades in lockstep with the panel's corner brackets.
+        p = self.parent()
+        if p is not None:
+            try:
+                p.update()
+            except Exception:
+                pass
 
     def _lerped_state_color(self) -> QColor:
         """Color interpolated between prev_state and current state."""
@@ -1416,7 +1424,7 @@ class _PanelWidget(QWidget):
         )
 
     def paintEvent(self, ev) -> None:
-        from PySide6.QtGui import QPainter, QLinearGradient, QBrush
+        from PySide6.QtGui import QPainter
         from dict.qt_design import paint_corner_brackets, SURFACE_1
         p_fill = QPainter(self)
         p_fill.fillRect(self.rect(), SURFACE_1)
@@ -1424,45 +1432,17 @@ class _PanelWidget(QWidget):
         super().paintEvent(ev)
 
         lerped = self._lerped_state_color()
-        r = self.rect()
 
-        # State-tinted edge halo: four soft gradients fading inward from each
-        # edge to transparent. Mirrors the design's `boxShadow 0 0 70px ${col}33`
-        # outer glow — since our frameless window can't paint outside its own
-        # rect, we fake it by painting an INWARD halo at the panel perimeter.
-        halo = QPainter(self)
-        halo.setRenderHint(QPainter.Antialiasing, False)
-        depth = 14
-        tint = QColor(lerped); tint.setAlpha(int(0.20 * 255))
-        clear = QColor(0, 0, 0, 0)
-        # Top
-        g_top = QLinearGradient(0, 0, 0, depth)
-        g_top.setColorAt(0.0, tint); g_top.setColorAt(1.0, clear)
-        halo.fillRect(0, 0, r.width(), depth, QBrush(g_top))
-        # Bottom
-        g_bot = QLinearGradient(0, r.height() - depth, 0, r.height())
-        g_bot.setColorAt(0.0, clear); g_bot.setColorAt(1.0, tint)
-        halo.fillRect(0, r.height() - depth, r.width(), depth, QBrush(g_bot))
-        # Left
-        g_left = QLinearGradient(0, 0, depth, 0)
-        g_left.setColorAt(0.0, tint); g_left.setColorAt(1.0, clear)
-        halo.fillRect(0, 0, depth, r.height(), QBrush(g_left))
-        # Right
-        g_right = QLinearGradient(r.width() - depth, 0, r.width(), 0)
-        g_right.setColorAt(0.0, clear); g_right.setColorAt(1.0, tint)
-        halo.fillRect(r.width() - depth, 0, depth, r.height(), QBrush(g_right))
-        halo.end()
+        # NB: Removed the inward 14px edge halo and the inner 1.5px border.
+        # User feedback: «градиент по краям светит внутрь приложения а не
+        # наружу» and «окошко live transcribe без рамки слева и справа» —
+        # the inward halo was painting over the transcript frame's L/R
+        # borders, and the hatch was visually wrong (inward instead of
+        # outward). The real outer glow is now done at the MainWindow level
+        # (state-tinted ring in the outer padding around this panel).
 
-        # State-tinted inner border
-        glow = QColor(lerped); glow.setAlpha(110)  # was 80 — slightly brighter
-        pen = QPen(glow); pen.setWidthF(1.5)
-        p_brd = QPainter(self)
-        p_brd.setRenderHint(QPainter.Antialiasing, True)
-        p_brd.setPen(pen); p_brd.setBrush(Qt.NoBrush)
-        p_brd.drawRect(QRectF(self.rect().adjusted(1, 1, -2, -2)))
-        p_brd.end()
-
-        # Corner brackets
+        # Corner brackets — kept (they read as HUD chrome and don't conflict
+        # with the outer ring).
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
         col = QColor(lerped); col.setAlpha(180)
@@ -1511,17 +1491,21 @@ class MainWindow(QWidget):
             | Qt.Tool
         )
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        self.setMinimumSize(500, 620)
-        self.resize(500, 620)
+        # Window dimensions = panel size + 2×GLOW_PAD on each side, so the
+        # padding ring holds a state-tinted outer glow that visually "leaks"
+        # outside the panel. Window itself is translucent in that ring.
+        self.GLOW_PAD = 14
+        panel_w, panel_h = 500, 620
+        win_w = panel_w + self.GLOW_PAD * 2
+        win_h = panel_h + self.GLOW_PAD * 2
+        self.setMinimumSize(win_w, win_h)
+        self.resize(win_w, win_h)
 
-        # Ensure any gap around the panel (e.g. bleed from drop shadow) is
-        # painted BG (#03040a) rather than the system default light gray.
-        from PySide6.QtGui import QPalette
-        from dict.qt_design import BG
-        pal = self.palette()
-        pal.setColor(QPalette.Window, BG)
-        self.setPalette(pal)
-        self.setAutoFillBackground(True)
+        # Translucent background so the glow ring blends over the desktop
+        # instead of sitting on an opaque dark square. The panel itself paints
+        # SURFACE_1 so its interior remains opaque dark.
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
 
         self._build_ui()
         self._apply_styles()
@@ -1542,7 +1526,12 @@ class MainWindow(QWidget):
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+        # GLOW_PAD ring around the panel — MainWindow.paintEvent fills this
+        # with a state-tinted outer glow that fades to fully transparent at
+        # the window edge (so it visually "leaks" past the panel).
+        outer.setContentsMargins(
+            self.GLOW_PAD, self.GLOW_PAD, self.GLOW_PAD, self.GLOW_PAD,
+        )
 
         # Panel container with hand-painted state-tinted border + corner brackets.
         # NB: a QGraphicsDropShadowEffect was tried here but caused hard crashes
@@ -1621,6 +1610,55 @@ class MainWindow(QWidget):
                 border-radius: 0px;
             }}
         """)
+
+    # ---- outer state-tinted glow ring (paints into GLOW_PAD margin) ----
+
+    def paintEvent(self, ev) -> None:  # noqa: N802
+        """Fill the GLOW_PAD ring around the panel with a state-tinted radial
+        glow that fades to fully transparent at the window edge. The interior
+        of the ring (under the panel itself) is transparent here because the
+        panel widget paints SURFACE_1 over it. The result is the design's
+        `boxShadow 0 0 70px ${stateColor}33` look — a TRUE outer glow.
+
+        We crossfade in the same state colour the panel uses, by reading
+        _panel._lerped_state_color() if available, so the glow ring shares the
+        panel's eased transition during idle↔rec↔decode flips."""
+        super().paintEvent(ev)
+        try:
+            from PySide6.QtGui import QPainter, QLinearGradient, QBrush
+            col = self._panel._lerped_state_color() if hasattr(self, "_panel") else None
+            if col is None:
+                from dict.qt_design import state_color
+                col = state_color("idle")
+            pad = self.GLOW_PAD
+            r = self.rect()
+            inner = r.adjusted(pad, pad, -pad, -pad)
+            p = QPainter(self)
+            p.setRenderHint(QPainter.Antialiasing, False)
+
+            tint_strong = QColor(col); tint_strong.setAlpha(int(0.35 * 255))
+            tint_weak   = QColor(col); tint_weak.setAlpha(int(0.10 * 255))
+            clear       = QColor(0, 0, 0, 0)
+
+            # Top band: clear (top edge) → tint_strong (inner panel edge)
+            g_top = QLinearGradient(0, 0, 0, pad)
+            g_top.setColorAt(0.0, clear); g_top.setColorAt(0.55, tint_weak); g_top.setColorAt(1.0, tint_strong)
+            p.fillRect(0, 0, r.width(), pad, QBrush(g_top))
+            # Bottom band
+            g_bot = QLinearGradient(0, r.height() - pad, 0, r.height())
+            g_bot.setColorAt(0.0, tint_strong); g_bot.setColorAt(0.45, tint_weak); g_bot.setColorAt(1.0, clear)
+            p.fillRect(0, r.height() - pad, r.width(), pad, QBrush(g_bot))
+            # Left band (only the strip between top and bottom bands)
+            g_left = QLinearGradient(0, 0, pad, 0)
+            g_left.setColorAt(0.0, clear); g_left.setColorAt(0.55, tint_weak); g_left.setColorAt(1.0, tint_strong)
+            p.fillRect(0, pad, pad, r.height() - 2 * pad, QBrush(g_left))
+            # Right band
+            g_right = QLinearGradient(r.width() - pad, 0, r.width(), 0)
+            g_right.setColorAt(0.0, tint_strong); g_right.setColorAt(0.45, tint_weak); g_right.setColorAt(1.0, clear)
+            p.fillRect(r.width() - pad, pad, pad, r.height() - 2 * pad, QBrush(g_right))
+            p.end()
+        except Exception:
+            log.exception("MainWindow.paintEvent outer-glow failed")
 
     # ---- drag-to-move (frameless) ----
 
@@ -1790,6 +1828,12 @@ class MainWindow(QWidget):
         topmost state on the next show/paint and the user sees the window
         bouncing back to top.
         """
+        # CRITICAL: if the window is hidden when REC starts, SetWindowPos on a
+        # hidden HWND won't make it visible. The user said «приложение перестало
+        # появляться когда я запись начинаю» — fix by show()-ing first.
+        if on and not self.isVisible():
+            self.show()
+
         import sys as _sys
         if _sys.platform == "win32":
             try:

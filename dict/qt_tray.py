@@ -35,10 +35,10 @@ class Tray(QObject):
         self._tray = QSystemTrayIcon(self._icons["idle"])
         self._tray.setToolTip("Dict — voice transcriber")
 
+        # Per user: simplify tray menu. Left-click toggles show/hide. The
+        # right-click context menu is just Quit. («show hide не работает по
+        # правой кнопке в трее. но и ок. давай уберем эту опцию вообще»)
         menu = QMenu()
-        show_act = menu.addAction("Show / hide")
-        show_act.triggered.connect(lambda: self._on_left_click())
-        menu.addSeparator()
         quit_act = menu.addAction("Quit")
         quit_act.triggered.connect(lambda: self._on_quit())
         self._tray.setContextMenu(menu)
