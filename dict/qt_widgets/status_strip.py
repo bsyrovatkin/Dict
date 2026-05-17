@@ -21,51 +21,29 @@ from dict.qt_design import (
 
 
 class _GlowLabel(QLabel):
-    """QLabel that paints a soft halo behind the text in the same colour as
-    the text itself. Mirrors app.jsx::StatRow `textShadow: 0 0 8px ${color}55`
-    when highlight=true (state != idle)."""
+    """Minimal label that just stores the foreground colour. Previously this
+    painted a soft radial halo behind the text, but the user reported it kept
+    reading as a stray underline. Halo removed; the value now relies on its
+    colour alone (state colour for STATE row)."""
     def __init__(self, text: str = "") -> None:
         super().__init__(text)
         self._fg = TEXT_HI
-        self._glow = False
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        # Force NO border, NO underline, NO frame — Qt sometimes inherits
+        # stylesheet rules from parents.
+        self.setFrameShape(QLabel.NoFrame)
+        self.setStyleSheet(
+            f"color: {self._fg.name()}; background: transparent;"
+            f" border: none; text-decoration: none;"
+        )
 
-    def set_color(self, color: QColor, *, glow: bool) -> None:
+    def set_color(self, color: QColor, *, glow: bool = False) -> None:
+        del glow  # ignored — kept for call-site compatibility
         self._fg = QColor(color)
-        self._glow = glow
-        self.setStyleSheet(f"color: {color.name()}; background: transparent;")
+        self.setStyleSheet(
+            f"color: {color.name()}; background: transparent;"
+            f" border: none; text-decoration: none;"
+        )
         self.update()
-
-    def paintEvent(self, ev) -> None:
-        if self._glow:
-            from PySide6.QtGui import QRadialGradient, QBrush, QFontMetrics
-            p = QPainter(self)
-            p.setRenderHint(QPainter.Antialiasing, True)
-            # Tight halo centred on the actual text geometry (not the full
-            # label rect — that previously bled to the bottom edge and read
-            # as an underline). Halo height matches text height, no overflow.
-            fm = QFontMetrics(self.font())
-            text = self.text() or ""
-            tw = fm.horizontalAdvance(text)
-            th = fm.height()
-            r = self.rect()
-            cx = r.x() + tw / 2.0   # left-anchored label
-            cy = r.y() + r.height() / 2.0
-            radius = max(tw, th) * 0.55
-            grad = QRadialGradient(cx, cy, radius)
-            halo = QColor(self._fg); halo.setAlpha(0x40)  # ~25% — softer than before
-            grad.setColorAt(0.0, halo)
-            grad.setColorAt(0.55, QColor(self._fg.red(), self._fg.green(), self._fg.blue(), 0x18))
-            grad.setColorAt(1.0, QColor(0, 0, 0, 0))
-            # Clip halo to text bounds vertically so it never leaks below
-            # the baseline (which is what looked like an underline).
-            from PySide6.QtCore import QRect
-            halo_rect = QRect(
-                int(cx - radius), int(cy - th / 2.0 - 2),
-                int(radius * 2),  int(th + 4),
-            )
-            p.fillRect(halo_rect, QBrush(grad))
-        super().paintEvent(ev)
 
 
 class _LevelMeter(QWidget):
@@ -137,40 +115,60 @@ class StatusStrip(QWidget):
         # Mono Medium 10pt (compact: was 11) for tabular numerics
         m = QFont(FONT_MONO); m.setPointSize(10); m.setWeight(QFont.Medium)
         m.setStyleHint(QFont.Monospace)
+        m.setUnderline(False); m.setStrikeOut(False)  # explicit no underline
         self._elapsed_value.setFont(m)
-        self._elapsed_value.setStyleSheet(f"color: {TEXT_HI.name()};")
+        self._elapsed_value.setFrameShape(QLabel.NoFrame)
+        self._elapsed_value.setStyleSheet(
+            f"color: {TEXT_HI.name()}; background: transparent;"
+            f" border: none; text-decoration: none;"
+        )
 
         self._peak_label_l = self._label_dim("PEAK")
         self._peak_value = QLabel("-∞ dB")
         # Same Mono Medium 10pt, slightly dimmer color
         mp = QFont(FONT_MONO); mp.setPointSize(10); mp.setWeight(QFont.Medium)
         mp.setStyleHint(QFont.Monospace)
+        mp.setUnderline(False); mp.setStrikeOut(False)
         self._peak_value.setFont(mp)
-        self._peak_value.setStyleSheet(f"color: {TEXT_MID.name()};")
+        self._peak_value.setFrameShape(QLabel.NoFrame)
+        self._peak_value.setStyleSheet(
+            f"color: {TEXT_MID.name()}; background: transparent;"
+            f" border: none; text-decoration: none;"
+        )
 
         self._level_label_l = self._label_dim("LEVEL")
         self._level_meter = _LevelMeter()
 
-        # Two-column rows. User asked to REMOVE ALL dividers — none under any
-        # row. Row spacing alone provides the visual rhythm; the radial halo
-        # under the STATE value (toned down below) also visually separates the
-        # hero readout from the smaller mono numerics.
+        # 3 dividers between rows (after STATE, after ELAPSED, after PEAK).
+        # No divider below LEVEL. Each divider is rendered as a single QHBoxLayout
+        # with a 56px transparent spacer (aligning with the label column) + a
+        # 140px-wide gradient line (aligning with the LEVEL meter / value column),
+        # mirroring the design's full-width Divider that sits flush with values.
         rows = [
-            (self._state_label_l, self._state_value),
-            (self._elapsed_label_l, self._elapsed_value),
-            (self._peak_label_l, self._peak_value),
-            (self._level_label_l, self._level_meter),
+            (self._state_label_l, self._state_value, True),    # divider after
+            (self._elapsed_label_l, self._elapsed_value, True),
+            (self._peak_label_l, self._peak_value, True),
+            (self._level_label_l, self._level_meter, False),
         ]
-        for lbl, val in rows:
+        for lbl, val, add_div in rows:
             row = QHBoxLayout()
             row.setSpacing(10)
             lbl.setFixedWidth(56)
             row.addWidget(lbl, 0)
             row.addWidget(val, 1, Qt.AlignLeft | Qt.AlignVCenter)
             v.addLayout(row)
-        # Slightly larger row spacing now that the dividers are gone, so rows
-        # still feel deliberate instead of crammed.
-        v.setSpacing(12)
+            if add_div:
+                # Wrap divider in a row so it indents to the value column.
+                drow = QHBoxLayout()
+                drow.setSpacing(10)
+                drow.setContentsMargins(0, 0, 0, 0)
+                spacer = QWidget()
+                spacer.setFixedWidth(56)
+                spacer.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                drow.addWidget(spacer, 0)
+                drow.addWidget(self._divider_value_col(), 1)
+                v.addLayout(drow)
+        v.setSpacing(8)  # tighter overall — dividers now provide rhythm
 
     def _label_dim(self, text: str) -> QLabel:
         lbl = QLabel(text)
@@ -182,22 +180,30 @@ class StatusStrip(QWidget):
         lbl.setStyleSheet(f"color: {TEXT_DIM.name()};")
         return lbl
 
-    def _divider(self) -> QWidget:
-        """Horizontal gradient line: line-mid alpha 18% at left, fades to
-        transparent at 80% across the width. Mirrors app.jsx::Divider."""
+    def _divider_value_col(self) -> QWidget:
+        """Gradient line aligned with the value column (LEVEL meter width).
+        Mirrors app.jsx::Divider — full width of the value column with the
+        line-mid colour fading from 22% alpha at the left to transparent at
+        the right (90% across). Sits at 1px tall.
+
+        User feedback: «2 подчеркивания разделителя ... должны быть длинее
+        на всю ширину шкалы как у левел и градиентом затукать»."""
         from PySide6.QtGui import QLinearGradient, QBrush, QPainter
 
         class _GradLine(QWidget):
             def __init__(self) -> None:
                 super().__init__()
                 self.setFixedHeight(1)
+                # Match LEVEL meter width so the divider visually pairs with
+                # the value column rather than spreading across the panel.
+                self.setMinimumWidth(140)
 
             def paintEvent(self, _ev) -> None:
                 p = QPainter(self)
                 w = self.width()
                 grad = QLinearGradient(0, 0, w, 0)
-                grad.setColorAt(0.0, QColor(138, 149, 172, int(0.18 * 255)))
-                grad.setColorAt(0.80, QColor(138, 149, 172, 0))
+                grad.setColorAt(0.0, QColor(138, 149, 172, int(0.22 * 255)))
+                grad.setColorAt(0.85, QColor(138, 149, 172, 0))
                 grad.setColorAt(1.0, QColor(138, 149, 172, 0))
                 p.fillRect(self.rect(), QBrush(grad))
 

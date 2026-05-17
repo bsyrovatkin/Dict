@@ -1501,11 +1501,21 @@ class MainWindow(QWidget):
         self.setMinimumSize(win_w, win_h)
         self.resize(win_w, win_h)
 
-        # Translucent background so the glow ring blends over the desktop
-        # instead of sitting on an opaque dark square. The panel itself paints
-        # SURFACE_1 so its interior remains opaque dark.
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setAutoFillBackground(False)
+        # OPAQUE window — translucent had two problems on Windows:
+        #  (a) the user's colourful desktop wallpaper bled through the 14px
+        #      glow ring and mixed with the state tint, producing the "грязный"
+        #      green/yellow stripe the user reported on screenshot #1.
+        #  (b) translucent frameless on Windows occasionally renders the panel
+        #      edge with a hard 1-px artifact.
+        # MainWindow.paintEvent now fills the ring with BG first, then layers
+        # the state-tinted glow on top — so the glow blends with consistent
+        # dark colour regardless of what's behind the window.
+        from PySide6.QtGui import QPalette
+        from dict.qt_design import BG
+        pal = self.palette()
+        pal.setColor(QPalette.Window, BG)
+        self.setPalette(pal)
+        self.setAutoFillBackground(True)
 
         self._build_ui()
         self._apply_styles()
