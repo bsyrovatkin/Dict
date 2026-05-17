@@ -9,3 +9,12 @@ build/
 *.egg-info/
 dict.log
 *.tmp
+
+# Runtime debug log + ad-hoc visual diagnostics
+dict-debug.log
+render-*.png
+window-*.png
+screen-*.png
+design-*.png
+render_widget_states.py
+render_window_states.py
