@@ -174,7 +174,7 @@ class RecordWidget(QWidget):
         # --- State transition (smooth cross-fade between idle/rec/decoding) -
         self._prev_state: str = self._state
         self._state_change_ms: float = 0.0
-        self._STATE_FADE_MS = 320.0
+        self._STATE_FADE_MS = 500.0
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -545,15 +545,13 @@ class RecordWidget(QWidget):
                             cy + math.sin(a_b) * r2_b),
                 )
 
-        # 5) Radar sweep (idle only) — conic gradient, annulus 72..118
-        if state == "idle":
+        # 5a) Radar sweep — idle-weighted (slow cyan/accent sweep)
+        if idle_amount > 0.001:
             sweep_a = (self._sweep_phase * 0.6) % (2 * math.pi)
-            # Qt's QConicalGradient: angle in degrees, 0 = 3 o'clock, ccw.
-            # JSX uses 0 = 3 o'clock CW with sweep starting at (sweepA - PI/2).
-            # Convert: rotate so the bright edge sits at sweep_a relative to 12 o'clock.
             angle_deg = (-math.degrees(sweep_a) + 90.0) % 360.0
             grad = QConicalGradient(QPointF(cx, cy), angle_deg)
-            grad.setColorAt(0.0, col["ink"])
+            ink = QColor(col["ink"]); ink.setAlphaF(min(1.0, ink.alphaF() * idle_amount))
+            grad.setColorAt(0.0, ink)
             grad.setColorAt(0.15, QColor(0, 0, 0, 0))
             grad.setColorAt(1.0, QColor(0, 0, 0, 0))
             outer = QPainterPath()
@@ -564,6 +562,27 @@ class RecordWidget(QWidget):
             p.setPen(Qt.NoPen)
             p.setBrush(QBrush(grad))
             p.drawPath(annulus)
+
+        # 5b) REC radar sweep — faster crimson sweep at a different radius so
+        # it doesn't compete with the VU ring. Adds visible "scanning" motion
+        # to the REC state without overpowering the equalizer.
+        if rec_amount > 0.001:
+            from dict.qt_design import CRIMSON_INK as _CRINK
+            rec_sweep_a = (self._sweep_phase * 1.2) % (2 * math.pi)
+            rec_angle_deg = (-math.degrees(rec_sweep_a) + 90.0) % 360.0
+            rec_grad = QConicalGradient(QPointF(cx, cy), rec_angle_deg)
+            rec_ink = QColor(_CRINK); rec_ink.setAlphaF(min(1.0, rec_ink.alphaF() * rec_amount * 0.7))
+            rec_grad.setColorAt(0.0, rec_ink)
+            rec_grad.setColorAt(0.18, QColor(0, 0, 0, 0))
+            rec_grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+            rec_outer = QPainterPath()
+            rec_outer.addEllipse(QPointF(cx, cy), 158, 158)
+            rec_inner = QPainterPath()
+            rec_inner.addEllipse(QPointF(cx, cy), 120, 120)
+            rec_annulus = rec_outer.subtracted(rec_inner)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(rec_grad))
+            p.drawPath(rec_annulus)
 
         # 6) Decoding multi-arc spinner + sonar pings — DEC-weighted so they
         # fade in/out smoothly during state transitions.
@@ -1282,43 +1301,89 @@ class _HeaderWidget(QWidget):
 # ---------- Panel widget with corner brackets ------------------------------
 
 class _PanelWidget(QWidget):
-    """Main panel widget: paints state-tinted corner brackets after children."""
+    """Main panel widget: paints state-tinted corner brackets after children.
+
+    Animates color crossfade during state changes so the panel border doesn't
+    snap (which previously caused the perceived 'screen flash' even though the
+    RecordWidget itself was smoothing — the OUTER frame was still snapping)."""
+
+    FADE_MS = 500
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._state = "idle"
+        self._prev_state = "idle"
+        self._fade_start_ms: float | None = None
+        self._fade_timer = QTimer(self)
+        self._fade_timer.setInterval(33)  # ~30fps during transition only
+        self._fade_timer.timeout.connect(self._on_fade_tick)
+        self._import_time()
+
+    def _import_time(self) -> None:
+        import time as _t
+        self._time = _t.monotonic
 
     def set_state(self, state: str) -> None:
+        if state != self._state:
+            self._prev_state = self._state
+            self._fade_start_ms = self._time() * 1000.0
+            if not self._fade_timer.isActive():
+                self._fade_timer.start()
         self._state = state
         self.update()
 
+    def _on_fade_tick(self) -> None:
+        if self._fade_start_ms is None:
+            self._fade_timer.stop()
+            return
+        age = self._time() * 1000.0 - self._fade_start_ms
+        if age >= self.FADE_MS:
+            self._fade_start_ms = None
+            self._fade_timer.stop()
+        self.update()
+
+    def _lerped_state_color(self) -> QColor:
+        """Color interpolated between prev_state and current state."""
+        from dict.qt_design import state_color
+        new_col = state_color(self._state)
+        if self._fade_start_ms is None or self._prev_state == self._state:
+            return new_col
+        age = self._time() * 1000.0 - self._fade_start_ms
+        if age >= self.FADE_MS:
+            return new_col
+        t = max(0.0, min(1.0, age / self.FADE_MS))
+        # Ease-out cubic
+        t = 1.0 - (1.0 - t) ** 3
+        prev_col = state_color(self._prev_state)
+        return QColor(
+            int(prev_col.red()   * (1 - t) + new_col.red()   * t),
+            int(prev_col.green() * (1 - t) + new_col.green() * t),
+            int(prev_col.blue()  * (1 - t) + new_col.blue()  * t),
+        )
+
     def paintEvent(self, ev) -> None:
-        # Explicit fill: stylesheet-driven background can be flaky under load,
-        # so paint SURFACE_1 ourselves first.
         from PySide6.QtGui import QPainter
-        from dict.qt_design import paint_corner_brackets, state_color, SURFACE_1
+        from dict.qt_design import paint_corner_brackets, SURFACE_1
         p_fill = QPainter(self)
         p_fill.fillRect(self.rect(), SURFACE_1)
         p_fill.end()
         super().paintEvent(ev)
 
-        # State-tinted inner border (replaces the brittle QGraphicsDropShadowEffect)
-        glow = QColor(state_color(self._state))
-        glow.setAlpha(80)
+        lerped = self._lerped_state_color()
+
+        # State-tinted inner border
+        glow = QColor(lerped); glow.setAlpha(80)
         pen = QPen(glow); pen.setWidthF(1.5)
         p_brd = QPainter(self)
         p_brd.setRenderHint(QPainter.Antialiasing, True)
         p_brd.setPen(pen); p_brd.setBrush(Qt.NoBrush)
-        # Inset 1px so the border sits inside the widget rect cleanly
         p_brd.drawRect(QRectF(self.rect().adjusted(1, 1, -2, -2)))
         p_brd.end()
 
+        # Corner brackets
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
-        col = state_color(self._state)
-        col = QColor(col)
-        col.setAlpha(180)
-        # Inset 1px so brackets sit on the panel border, not outside
+        col = QColor(lerped); col.setAlpha(180)
         rect = self.rect().adjusted(1, 1, -2, -2)
         paint_corner_brackets(p, rect, col, size=14, width=1.5)
 
