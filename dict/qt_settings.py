@@ -858,7 +858,8 @@ class SettingsDialog(QDialog):
 
         h.addStretch()
 
-        # × close button
+        # × close button — saves AND closes (most users expect this).
+        # ESC still discards via QDialog's default key binding.
         close_btn = QPushButton("×")
         close_btn.setFixedSize(24, 20)
         close_btn.setCursor(Qt.PointingHandCursor)
@@ -868,9 +869,18 @@ class SettingsDialog(QDialog):
             f"QPushButton {{ background: transparent; border: none; color: {TEXT_MID.name()}; }}"
             f"QPushButton:hover {{ color: {TEXT_HI.name()}; }}"
         )
-        close_btn.clicked.connect(self.reject)
+        close_btn.clicked.connect(self._save)
         h.addWidget(close_btn)
         return w
+
+    def closeEvent(self, ev) -> None:
+        """Window close (via OS close gesture / Alt+F4 etc.) also saves —
+        matches user expectation that 'closing' = 'keep my changes'."""
+        try:
+            self._save()
+        except Exception:
+            log.exception("_save on closeEvent failed; discarding")
+        ev.accept()
 
     def _build_body(self, layout: QVBoxLayout) -> None:
         # §01 AUDIO
