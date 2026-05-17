@@ -1695,26 +1695,24 @@ class MainWindow(QWidget):
             except Exception:
                 log.exception("SetWindowPos failed (continuing with Qt fallback)")
 
-        # Sync Qt's internal flag state. On Windows the SetWindowPos call
-        # already did the visible change; this just keeps Qt's view in sync.
-        # On macOS/Linux this IS the topmost mechanism (Qt setWindowFlag +
-        # show()/raise_()/lower()), at the cost of a brief flag-toggle flicker.
-        try:
-            current = bool(self.windowFlags() & Qt.WindowStaysOnTopHint)
-            if current != bool(on):
-                # Save state because setWindowFlag may hide; we want it shown.
-                self.setWindowFlag(Qt.WindowStaysOnTopHint, bool(on))
-                if not self.isVisible():
-                    # Restore visibility without focus or activation.
-                    self.show()
-                else:
-                    # On non-Windows, re-show to apply the new flag.
-                    if _sys.platform != "win32":
+        # On Windows the SetWindowPos call above already did the visible
+        # change. DO NOT call setWindowFlag on Windows — it triggers a Qt
+        # hide+show cycle which appears as a 1-frame blink during the
+        # idle→rec transition (and was the actual cause of the "блик"
+        # the user kept reporting; the widget crossfade was correct).
+        # Qt's internal flag is stale but doesn't affect actual window state.
+        if _sys.platform != "win32":
+            try:
+                current = bool(self.windowFlags() & Qt.WindowStaysOnTopHint)
+                if current != bool(on):
+                    self.setWindowFlag(Qt.WindowStaysOnTopHint, bool(on))
+                    if not self.isVisible():
                         self.show()
-            if _sys.platform != "win32":
+                    else:
+                        self.show()
                 if on:
                     self.raise_()
                 else:
                     self.lower()
-        except Exception:
-            log.exception("Qt flag sync failed")
+            except Exception:
+                log.exception("Qt flag sync failed")
