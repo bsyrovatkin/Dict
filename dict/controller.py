@@ -140,24 +140,20 @@ class Controller:
             current = self._state
         if current is State.IDLE:
             return
-        # Lazy import — keeps controller decoupled from paste module's deps
-        # at unit-test time (tests stub MagicMock for self._paste).
-        from dict import paste as _paste_mod
-        from dict import config as _cfg
-
         # Separator: prepend a space before every chunk except the first one
         # in this session, so "hello" + "world" → "hello world".
         payload = (" " + text) if self._session_streamed else text
+        # Use clipboard + Ctrl+V (paste) instead of typewriter SendInput.
+        # Reason: pynput type-by-char sends a real Space keystroke for " ",
+        # which browsers without strict focus on a text input interpret as
+        # "page-scroll-down". Clipboard paste is atomic and doesn't trigger
+        # browser key-event listeners.
         try:
-            ok = _paste_mod.type_text(
-                payload,
-                current_hotkey=self._get_current_hotkey(),
-                delay_s=_cfg.STREAM_TYPE_DELAY_S,
-            )
+            ok = self._paste(payload, self._get_current_hotkey())
             self._session_streamed = True
-            log.info("stream-type chunk (%d chars) ok=%s", len(payload), ok)
+            log.info("stream-paste chunk (%d chars) ok=%s", len(payload), ok)
         except Exception:
-            log.exception("stream-type failed for chunk")
+            log.exception("stream-paste failed for chunk")
 
     def _start_recording(self) -> None:
         if not getattr(self._transcriber, "is_loaded", True):
