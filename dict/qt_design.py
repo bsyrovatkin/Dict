@@ -58,6 +58,8 @@ def state_color(state: str) -> QColor:
         return CRIMSON
     if state in ("busy", "transcribing", "decoding"):
         return AMBER
+    if state == "loading":
+        return CYAN_DEEP
     return ACCENT
 
 
@@ -66,6 +68,8 @@ def state_color_ink(state: str) -> QColor:
         return CRIMSON_INK
     if state in ("busy", "transcribing", "decoding"):
         return AMBER_INK
+    if state == "loading":
+        return QColor(CYAN_DEEP.red(), CYAN_DEEP.green(), CYAN_DEEP.blue(), int(0.45 * 255))
     return ACCENT_INK
 
 

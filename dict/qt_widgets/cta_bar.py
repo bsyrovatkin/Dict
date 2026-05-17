@@ -100,6 +100,7 @@ class CTABar(QWidget):
         self._post.setText(
             "TO STOP & TRANSCRIBE" if state in ("recording", "rec")
             else "TO CANCEL DECODING" if state in ("busy", "transcribing", "decoding")
+            else "WHISPER MODEL LOADING…" if state == "loading"
             else "TO START DICTATION"
         )
 

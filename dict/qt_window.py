@@ -967,7 +967,7 @@ class _StatusPill(QWidget):
             p.setBrush(QBrush(col))
             p.setPen(Qt.NoPen)
             p.drawEllipse(QPointF(cx_marker, cy_marker), radius, radius)
-        elif state in ("busy", "transcribing", "decoding"):
+        elif state in ("busy", "transcribing", "decoding", "loading"):
             # Rotating arc — like a spinner, only the top arc portion
             p.setBrush(Qt.NoBrush)
             spin_angle = math.degrees(self._phase * 3.0) % 360.0  # fast spin
@@ -996,9 +996,13 @@ class _StatusPill(QWidget):
         # --- Label text ---
         label = ("REC" if state in ("recording", "rec")
                  else "DECODING" if state in ("busy", "transcribing", "decoding")
+                 else "LOADING" if state == "loading"
                  else "READY")
         if state == "idle":
             text_col = QColor(138, 149, 172, int(0.75 * 255))  # TEXT_MID-ish
+        elif state == "loading":
+            from dict.qt_design import CYAN_DEEP
+            text_col = CYAN_DEEP
         else:
             text_col = col
 

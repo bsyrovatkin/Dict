@@ -139,6 +139,9 @@ class StatusStrip(QWidget):
             self._state_value.setText("REC")
         elif state in ("busy", "transcribing", "decoding"):
             self._state_value.setText("DECODE")
+        elif state == "loading":
+            self._t0 = None
+            self._state_value.setText("LOADING…")
         else:
             self._t0 = None
             self._state_value.setText("IDLE")
