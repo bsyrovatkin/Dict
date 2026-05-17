@@ -1696,38 +1696,60 @@ class MainWindow(QWidget):
         self.show()
 
     def _apply_toggle(self) -> None:
-        if self.isVisible():
-            self.hide()
+        """Tri-state tray toggle:
+          - visible AND active (frontmost) → hide
+          - visible BUT covered by another window → bring to front + brief topmost pop
+          - hidden → show + brief topmost pop
+        The middle case was missing — when Dict was visible but obscured by Chrome,
+        the click hit `isVisible() == True` branch and hid it, so a SECOND tray
+        click was needed to actually see it.
+        """
+        # isMinimized triggers a separate restore path
+        if self.isMinimized():
+            self.showNormal()
+            self._tray_pop_topmost()
             return
+        if self.isVisible():
+            # Distinguish frontmost vs covered. On Windows, isActiveWindow is
+            # the strongest signal of "frontmost"; if false, the window may be
+            # technically visible but obscured.
+            if self.isActiveWindow():
+                self.hide()
+                return
+            # Visible but covered — bring to front.
+            self.raise_()
+            self.activateWindow()
+            self._tray_pop_topmost()
+            return
+        # Hidden — show + pop topmost briefly so it appears above the foreground app.
         self.show()
-        # Briefly pop to topmost so the window actually appears above the
-        # foreground app the user was working in. Drop back to non-topmost on
-        # the next tick so other apps can naturally cover Dict afterwards.
+        self._tray_pop_topmost()
+
+    def _tray_pop_topmost(self) -> None:
+        """Briefly pop to topmost (800ms) so the window actually appears above
+        the user's foreground app, then drop back to non-topmost so other apps
+        can naturally cover Dict afterwards."""
         try:
             import sys as _s
-            if _s.platform == "win32":
-                import ctypes
-                HWND_TOPMOST = -1
-                HWND_NOTOPMOST = -2
-                SWP_NOMOVE = 0x0002
-                SWP_NOSIZE = 0x0001
-                SWP_NOACTIVATE = 0x0010
-                user32 = ctypes.windll.user32
-                hwnd = int(self.winId())
-                user32.SetWindowPos(
-                    hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                )
-                from PySide6.QtCore import QTimer as _QT
-                _QT.singleShot(
-                    800,
-                    lambda: user32.SetWindowPos(
-                        hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                    ),
-                )
+            if _s.platform != "win32":
+                return
+            import ctypes
+            HWND_TOPMOST = -1
+            HWND_NOTOPMOST = -2
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            user32 = ctypes.windll.user32
+            hwnd = int(self.winId())
+            flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+            user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+            from PySide6.QtCore import QTimer as _QT
+            _QT.singleShot(
+                800,
+                lambda: user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags),
+            )
         except Exception:
-            log.exception("tray show: SetWindowPos topmost flash failed")
+            log.exception("tray pop-topmost failed")
 
     def _apply_partial_appended(self, text: str) -> None:
         self._transcript_panel.append_partial(text)

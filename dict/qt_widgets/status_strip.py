@@ -38,20 +38,33 @@ class _GlowLabel(QLabel):
 
     def paintEvent(self, ev) -> None:
         if self._glow:
+            from PySide6.QtGui import QRadialGradient, QBrush, QFontMetrics
             p = QPainter(self)
             p.setRenderHint(QPainter.Antialiasing, True)
-            # Two-pass faux glow: large soft halo + tighter inner halo.
+            # Tight halo centred on the actual text geometry (not the full
+            # label rect — that previously bled to the bottom edge and read
+            # as an underline). Halo height matches text height, no overflow.
+            fm = QFontMetrics(self.font())
+            text = self.text() or ""
+            tw = fm.horizontalAdvance(text)
+            th = fm.height()
             r = self.rect()
-            from PySide6.QtGui import QRadialGradient, QBrush
-            cx, cy = r.width() / 2.0, r.height() / 2.0
-            radius = max(r.width(), r.height()) * 0.65
+            cx = r.x() + tw / 2.0   # left-anchored label
+            cy = r.y() + r.height() / 2.0
+            radius = max(tw, th) * 0.55
             grad = QRadialGradient(cx, cy, radius)
-            halo = QColor(self._fg); halo.setAlpha(0x55)  # 0x55 ≈ 33% — matches CSS "color55"
-            inner = QColor(self._fg); inner.setAlpha(0x28)
+            halo = QColor(self._fg); halo.setAlpha(0x40)  # ~25% — softer than before
             grad.setColorAt(0.0, halo)
-            grad.setColorAt(0.45, inner)
+            grad.setColorAt(0.55, QColor(self._fg.red(), self._fg.green(), self._fg.blue(), 0x18))
             grad.setColorAt(1.0, QColor(0, 0, 0, 0))
-            p.fillRect(r, QBrush(grad))
+            # Clip halo to text bounds vertically so it never leaks below
+            # the baseline (which is what looked like an underline).
+            from PySide6.QtCore import QRect
+            halo_rect = QRect(
+                int(cx - radius), int(cy - th / 2.0 - 2),
+                int(radius * 2),  int(th + 4),
+            )
+            p.fillRect(halo_rect, QBrush(grad))
         super().paintEvent(ev)
 
 
@@ -138,25 +151,26 @@ class StatusStrip(QWidget):
         self._level_label_l = self._label_dim("LEVEL")
         self._level_meter = _LevelMeter()
 
-        # Two-column rows. Divider pattern mirrors app.jsx:
-        #   STATE  ─── divider ───  ELAPSED  PEAK  ─── divider ───  LEVEL
-        # i.e. ONE divider after STATE, ONE divider between PEAK and LEVEL.
-        # No divider between ELAPSED and PEAK, no divider below LEVEL.
+        # Two-column rows. User asked to REMOVE ALL dividers — none under any
+        # row. Row spacing alone provides the visual rhythm; the radial halo
+        # under the STATE value (toned down below) also visually separates the
+        # hero readout from the smaller mono numerics.
         rows = [
-            (self._state_label_l, self._state_value, True),    # divider AFTER state
-            (self._elapsed_label_l, self._elapsed_value, False),
-            (self._peak_label_l, self._peak_value, True),      # divider AFTER peak
-            (self._level_label_l, self._level_meter, False),
+            (self._state_label_l, self._state_value),
+            (self._elapsed_label_l, self._elapsed_value),
+            (self._peak_label_l, self._peak_value),
+            (self._level_label_l, self._level_meter),
         ]
-        for lbl, val, add_div in rows:
+        for lbl, val in rows:
             row = QHBoxLayout()
             row.setSpacing(10)
             lbl.setFixedWidth(56)
             row.addWidget(lbl, 0)
             row.addWidget(val, 1, Qt.AlignLeft | Qt.AlignVCenter)
             v.addLayout(row)
-            if add_div:
-                v.addWidget(self._divider())
+        # Slightly larger row spacing now that the dividers are gone, so rows
+        # still feel deliberate instead of crammed.
+        v.setSpacing(12)
 
     def _label_dim(self, text: str) -> QLabel:
         lbl = QLabel(text)
