@@ -164,6 +164,10 @@ class Controller:
             log.exception("stream-type failed for chunk")
 
     def _start_recording(self) -> None:
+        log.info(
+            "_start_recording invoked: transcriber.is_loaded=%s",
+            getattr(self._transcriber, "is_loaded", True),
+        )
         if not getattr(self._transcriber, "is_loaded", True):
             log.info("hotkey while model still loading — ignoring")
             self._tray.set_state("loading")

@@ -1804,15 +1804,17 @@ class MainWindow(QWidget):
         topmost state on the next show/paint and the user sees the window
         bouncing back to top.
         """
+        log.info(
+            "_apply_always_on_top(on=%s) visible=%s minimized=%s",
+            on, self.isVisible(), self.isMinimized(),
+        )
+
         # CRITICAL: if the window is hidden when REC starts, SetWindowPos on a
         # hidden HWND won't make it visible. Show first, then bring to front.
         if on and not self.isVisible():
             self.show()
         if on and self.isMinimized():
             self.showNormal()
-
-        # Qt-side raise: triggers Windows' BringWindowToTop internally. We do
-        # this BEFORE SetWindowPos so Qt's window-flag stack is up to date.
         if on:
             try:
                 self.raise_()
@@ -1820,33 +1822,27 @@ class MainWindow(QWidget):
                 log.exception("self.raise_() before topmost failed")
 
         import sys as _sys
+        if _sys.platform == "win32" and on:
+            # Defer the win32 pop by 50ms so Qt has time to actually map
+            # the window (show() is async). Running SetWindowPos on an
+            # un-mapped HWND silently does nothing on some Windows builds.
+            from PySide6.QtCore import QTimer as _QT
+            _QT.singleShot(50, self._win32_pop_topmost)
+
+        import sys as _sys
         if _sys.platform == "win32":
             try:
                 import ctypes
-                HWND_TOPMOST    = -1
                 HWND_NOTOPMOST  = -2
-                HWND_TOP        =  0
-                HWND_BOTTOM     =  1
                 SWP_NOSIZE      = 0x0001
                 SWP_NOMOVE      = 0x0002
                 SWP_NOACTIVATE  = 0x0010
-                SWP_SHOWWINDOW  = 0x0040
                 flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
                 hwnd = int(self.winId())
                 user32 = ctypes.windll.user32
                 if on:
-                    # Pin topmost — covers all non-topmost windows. SWP_SHOWWINDOW
-                    # forces the window to be shown if it isn't already, belt &
-                    # braces with the self.show() above.
-                    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags | SWP_SHOWWINDOW)
-                    # Raise above other topmost peers (Chrome F11 fullscreen, NV overlay, …)
-                    user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags)
-                    # BringWindowToTop is the final escape hatch — it works
-                    # even when SetForegroundWindow is blocked by UIPI.
-                    try:
-                        user32.BringWindowToTop(hwnd)
-                    except Exception:
-                        log.exception("BringWindowToTop failed")
+                    # Already deferred via QTimer.singleShot above.
+                    pass
                 else:
                     # Clear topmost. We DO NOT push to HWND_BOTTOM anymore —
                     # user wants the window to stay where the eye is (still
@@ -1879,3 +1875,78 @@ class MainWindow(QWidget):
                     self.lower()
             except Exception:
                 log.exception("Qt flag sync failed")
+
+    def _win32_pop_topmost(self) -> None:
+        """Aggressive Windows-only routine that brings the window above the
+        currently-foreground app WITHOUT permanently stealing focus. Uses the
+        AttachThreadInput trick to bypass Windows' foreground-rights UIPI
+        (which silently makes SetWindowPos a no-op when our app isn't the
+        active foreground window).
+
+        Flow:
+          1. Save current foreground hwnd
+          2. Attach our thread input to the foreground thread
+          3. SetWindowPos(HWND_TOPMOST | SWP_SHOWWINDOW) — actually elevates
+          4. BringWindowToTop — z-order update
+          5. Detach
+          6. Restore foreground hwnd via SetWindowPos NOACTIVATE — fixes any
+             accidental focus shift so auto-paste keeps targeting Chrome.
+        """
+        import sys as _sys
+        if _sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+            HWND_TOPMOST = -1
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOACTIVATE = 0x0010
+            SWP_SHOWWINDOW = 0x0040
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            hwnd = int(self.winId())
+
+            # 1. Save foreground (so we can return focus to it).
+            old_fg = user32.GetForegroundWindow()
+            log.info("_win32_pop_topmost: my_hwnd=%s old_fg=%s", hwnd, old_fg)
+
+            # 2. Attach our thread input to the foreground thread.
+            attached = False
+            try:
+                fg_thread = user32.GetWindowThreadProcessId(old_fg, 0) if old_fg else 0
+                my_thread = kernel32.GetCurrentThreadId()
+                if fg_thread and fg_thread != my_thread:
+                    attached = bool(user32.AttachThreadInput(fg_thread, my_thread, True))
+            except Exception:
+                log.exception("_win32_pop_topmost: AttachThreadInput failed")
+
+            # 3+4. Force topmost + raise.
+            flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+            user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+            try:
+                user32.BringWindowToTop(hwnd)
+            except Exception:
+                log.exception("_win32_pop_topmost: BringWindowToTop failed")
+
+            # 5. Detach.
+            if attached:
+                try:
+                    user32.AttachThreadInput(fg_thread, my_thread, False)
+                except Exception:
+                    log.exception("_win32_pop_topmost: detach failed")
+
+            # 6. Restore the foreground app's focus (without changing z-order).
+            if old_fg and old_fg != hwnd:
+                try:
+                    user32.SetWindowPos(
+                        old_fg, 0, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    )
+                    # Re-issue our TOPMOST after restoring the other window
+                    # so we're guaranteed to stay on top of it.
+                    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+                except Exception:
+                    log.exception("_win32_pop_topmost: restore focus failed")
+        except Exception:
+            log.exception("_win32_pop_topmost failed")
