@@ -1424,7 +1424,7 @@ class _PanelWidget(QWidget):
         )
 
     def paintEvent(self, ev) -> None:
-        from PySide6.QtGui import QPainter
+        from PySide6.QtGui import QPainter, QRadialGradient, QBrush
         from dict.qt_design import paint_corner_brackets, SURFACE_1
         p_fill = QPainter(self)
         p_fill.fillRect(self.rect(), SURFACE_1)
@@ -1432,20 +1432,37 @@ class _PanelWidget(QWidget):
         super().paintEvent(ev)
 
         lerped = self._lerped_state_color()
+        r = self.rect()
 
-        # NB: Removed the inward 14px edge halo and the inner 1.5px border.
-        # User feedback: «градиент по краям светит внутрь приложения а не
-        # наружу» and «окошко live transcribe без рамки слева и справа» —
-        # the inward halo was painting over the transcript frame's L/R
-        # borders, and the hatch was visually wrong (inward instead of
-        # outward). The real outer glow is now done at the MainWindow level
-        # (state-tinted ring in the outer padding around this panel).
+        # State-tinted corner halos: four radial gradients positioned at the
+        # four corners of the panel, each ~120px radius, tinted by current
+        # state. No edge bands — corners glow individually, no crossing
+        # artifacts, and the panel reads as "glowing from the corner brackets"
+        # which matches the design's intent.
+        halo = QPainter(self)
+        halo.setRenderHint(QPainter.Antialiasing, True)
+        radius = 130.0
+        tint_in  = QColor(lerped); tint_in.setAlpha(int(0.18 * 255))
+        tint_mid = QColor(lerped); tint_mid.setAlpha(int(0.05 * 255))
+        clear    = QColor(0, 0, 0, 0)
+        corners = [
+            (r.x(), r.y()),                            # top-left
+            (r.x() + r.width(), r.y()),                # top-right
+            (r.x(), r.y() + r.height()),               # bottom-left
+            (r.x() + r.width(), r.y() + r.height()),   # bottom-right
+        ]
+        for cx, cy in corners:
+            grad = QRadialGradient(cx, cy, radius)
+            grad.setColorAt(0.0, tint_in)
+            grad.setColorAt(0.55, tint_mid)
+            grad.setColorAt(1.0, clear)
+            halo.fillRect(r, QBrush(grad))
+        halo.end()
 
-        # Corner brackets — kept (they read as HUD chrome and don't conflict
-        # with the outer ring).
+        # Corner brackets — sit on top of the corner halos in the state colour.
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
-        col = QColor(lerped); col.setAlpha(180)
+        col = QColor(lerped); col.setAlpha(200)
         rect = self.rect().adjusted(1, 1, -2, -2)
         paint_corner_brackets(p, rect, col, size=14, width=1.5)
 
@@ -1491,15 +1508,14 @@ class MainWindow(QWidget):
             | Qt.Tool
         )
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        # Window dimensions = panel size + 2×GLOW_PAD on each side, so the
-        # padding ring holds a state-tinted outer glow that visually "leaks"
-        # outside the panel. Window itself is translucent in that ring.
-        self.GLOW_PAD = 14
-        panel_w, panel_h = 500, 620
-        win_w = panel_w + self.GLOW_PAD * 2
-        win_h = panel_h + self.GLOW_PAD * 2
-        self.setMinimumSize(win_w, win_h)
-        self.resize(win_w, win_h)
+        # No outer GLOW_PAD ring. Previous attempts (translucent ring vs
+        # opaque ring with band-gradient) both produced artifacts the user
+        # rejected — desktop bleed-through, dark-frame look, corner cross
+        # overlaps. The state-tinted glow is now painted INSIDE the panel via
+        # corner radial gradients (no edge bands, no crossing).
+        self.GLOW_PAD = 0
+        self.setMinimumSize(500, 620)
+        self.resize(500, 620)
 
         # OPAQUE window — translucent had two problems on Windows:
         #  (a) the user's colourful desktop wallpaper bled through the 14px
@@ -1536,12 +1552,7 @@ class MainWindow(QWidget):
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
-        # GLOW_PAD ring around the panel — MainWindow.paintEvent fills this
-        # with a state-tinted outer glow that fades to fully transparent at
-        # the window edge (so it visually "leaks" past the panel).
-        outer.setContentsMargins(
-            self.GLOW_PAD, self.GLOW_PAD, self.GLOW_PAD, self.GLOW_PAD,
-        )
+        outer.setContentsMargins(0, 0, 0, 0)  # no ring, panel fills the window
 
         # Panel container with hand-painted state-tinted border + corner brackets.
         # NB: a QGraphicsDropShadowEffect was tried here but caused hard crashes
@@ -1621,54 +1632,9 @@ class MainWindow(QWidget):
             }}
         """)
 
-    # ---- outer state-tinted glow ring (paints into GLOW_PAD margin) ----
-
-    def paintEvent(self, ev) -> None:  # noqa: N802
-        """Fill the GLOW_PAD ring around the panel with a state-tinted radial
-        glow that fades to fully transparent at the window edge. The interior
-        of the ring (under the panel itself) is transparent here because the
-        panel widget paints SURFACE_1 over it. The result is the design's
-        `boxShadow 0 0 70px ${stateColor}33` look — a TRUE outer glow.
-
-        We crossfade in the same state colour the panel uses, by reading
-        _panel._lerped_state_color() if available, so the glow ring shares the
-        panel's eased transition during idle↔rec↔decode flips."""
-        super().paintEvent(ev)
-        try:
-            from PySide6.QtGui import QPainter, QLinearGradient, QBrush
-            col = self._panel._lerped_state_color() if hasattr(self, "_panel") else None
-            if col is None:
-                from dict.qt_design import state_color
-                col = state_color("idle")
-            pad = self.GLOW_PAD
-            r = self.rect()
-            inner = r.adjusted(pad, pad, -pad, -pad)
-            p = QPainter(self)
-            p.setRenderHint(QPainter.Antialiasing, False)
-
-            tint_strong = QColor(col); tint_strong.setAlpha(int(0.35 * 255))
-            tint_weak   = QColor(col); tint_weak.setAlpha(int(0.10 * 255))
-            clear       = QColor(0, 0, 0, 0)
-
-            # Top band: clear (top edge) → tint_strong (inner panel edge)
-            g_top = QLinearGradient(0, 0, 0, pad)
-            g_top.setColorAt(0.0, clear); g_top.setColorAt(0.55, tint_weak); g_top.setColorAt(1.0, tint_strong)
-            p.fillRect(0, 0, r.width(), pad, QBrush(g_top))
-            # Bottom band
-            g_bot = QLinearGradient(0, r.height() - pad, 0, r.height())
-            g_bot.setColorAt(0.0, tint_strong); g_bot.setColorAt(0.45, tint_weak); g_bot.setColorAt(1.0, clear)
-            p.fillRect(0, r.height() - pad, r.width(), pad, QBrush(g_bot))
-            # Left band (only the strip between top and bottom bands)
-            g_left = QLinearGradient(0, 0, pad, 0)
-            g_left.setColorAt(0.0, clear); g_left.setColorAt(0.55, tint_weak); g_left.setColorAt(1.0, tint_strong)
-            p.fillRect(0, pad, pad, r.height() - 2 * pad, QBrush(g_left))
-            # Right band
-            g_right = QLinearGradient(r.width() - pad, 0, r.width(), 0)
-            g_right.setColorAt(0.0, tint_strong); g_right.setColorAt(0.45, tint_weak); g_right.setColorAt(1.0, clear)
-            p.fillRect(r.width() - pad, pad, pad, r.height() - 2 * pad, QBrush(g_right))
-            p.end()
-        except Exception:
-            log.exception("MainWindow.paintEvent outer-glow failed")
+    # Outer-ring glow removed entirely. The panel widget now paints 4 corner
+    # radial gradients on its inside edge, which gives a "glow from the corner
+    # brackets" feel without any band-crossing artifacts on the corners.
 
     # ---- drag-to-move (frameless) ----
 
@@ -1839,10 +1805,19 @@ class MainWindow(QWidget):
         bouncing back to top.
         """
         # CRITICAL: if the window is hidden when REC starts, SetWindowPos on a
-        # hidden HWND won't make it visible. The user said «приложение перестало
-        # появляться когда я запись начинаю» — fix by show()-ing first.
+        # hidden HWND won't make it visible. Show first, then bring to front.
         if on and not self.isVisible():
             self.show()
+        if on and self.isMinimized():
+            self.showNormal()
+
+        # Qt-side raise: triggers Windows' BringWindowToTop internally. We do
+        # this BEFORE SetWindowPos so Qt's window-flag stack is up to date.
+        if on:
+            try:
+                self.raise_()
+            except Exception:
+                log.exception("self.raise_() before topmost failed")
 
         import sys as _sys
         if _sys.platform == "win32":
@@ -1855,14 +1830,23 @@ class MainWindow(QWidget):
                 SWP_NOSIZE      = 0x0001
                 SWP_NOMOVE      = 0x0002
                 SWP_NOACTIVATE  = 0x0010
+                SWP_SHOWWINDOW  = 0x0040
                 flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
                 hwnd = int(self.winId())
                 user32 = ctypes.windll.user32
                 if on:
-                    # Pin topmost — covers all non-topmost windows
-                    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
-                    # Also raise above other topmost peers (rare but possible)
+                    # Pin topmost — covers all non-topmost windows. SWP_SHOWWINDOW
+                    # forces the window to be shown if it isn't already, belt &
+                    # braces with the self.show() above.
+                    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags | SWP_SHOWWINDOW)
+                    # Raise above other topmost peers (Chrome F11 fullscreen, NV overlay, …)
                     user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags)
+                    # BringWindowToTop is the final escape hatch — it works
+                    # even when SetForegroundWindow is blocked by UIPI.
+                    try:
+                        user32.BringWindowToTop(hwnd)
+                    except Exception:
+                        log.exception("BringWindowToTop failed")
                 else:
                     # Clear topmost. We DO NOT push to HWND_BOTTOM anymore —
                     # user wants the window to stay where the eye is (still

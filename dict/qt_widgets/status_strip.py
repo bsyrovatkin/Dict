@@ -98,6 +98,14 @@ class StatusStrip(QWidget):
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(10)
+        # Defensive: kill any cascaded border/text-decoration on every QLabel
+        # in this strip. Some Qt versions inherit border rules from parent
+        # stylesheets onto descendants — this was the source of the stubborn
+        # "1px line under every label / value" the user kept reporting.
+        self.setStyleSheet(
+            "QLabel { border: none; text-decoration: none;"
+            " background: transparent; }"
+        )
 
         self._state_label_l = self._label_dim("STATE")
         # Use the glow-aware label so the value gets a state-tinted text-shadow
@@ -139,36 +147,24 @@ class StatusStrip(QWidget):
         self._level_label_l = self._label_dim("LEVEL")
         self._level_meter = _LevelMeter()
 
-        # 3 dividers between rows (after STATE, after ELAPSED, after PEAK).
-        # No divider below LEVEL. Each divider is rendered as a single QHBoxLayout
-        # with a 56px transparent spacer (aligning with the label column) + a
-        # 140px-wide gradient line (aligning with the LEVEL meter / value column),
-        # mirroring the design's full-width Divider that sits flush with values.
+        # NO dividers between rows. User has reported 1px-line artifacts at
+        # each row break — they perceive the dividers as stray underlines no
+        # matter where I place them. Removed entirely; row spacing alone now
+        # provides the visual rhythm (16px between rows = clear separation).
         rows = [
-            (self._state_label_l, self._state_value, True),    # divider after
-            (self._elapsed_label_l, self._elapsed_value, True),
-            (self._peak_label_l, self._peak_value, True),
-            (self._level_label_l, self._level_meter, False),
+            (self._state_label_l, self._state_value),
+            (self._elapsed_label_l, self._elapsed_value),
+            (self._peak_label_l, self._peak_value),
+            (self._level_label_l, self._level_meter),
         ]
-        for lbl, val, add_div in rows:
+        for lbl, val in rows:
             row = QHBoxLayout()
             row.setSpacing(10)
             lbl.setFixedWidth(56)
             row.addWidget(lbl, 0)
             row.addWidget(val, 1, Qt.AlignLeft | Qt.AlignVCenter)
             v.addLayout(row)
-            if add_div:
-                # Wrap divider in a row so it indents to the value column.
-                drow = QHBoxLayout()
-                drow.setSpacing(10)
-                drow.setContentsMargins(0, 0, 0, 0)
-                spacer = QWidget()
-                spacer.setFixedWidth(56)
-                spacer.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-                drow.addWidget(spacer, 0)
-                drow.addWidget(self._divider_value_col(), 1)
-                v.addLayout(drow)
-        v.setSpacing(8)  # tighter overall — dividers now provide rhythm
+        v.setSpacing(16)  # large gap so rows still feel separate without lines
 
     def _label_dim(self, text: str) -> QLabel:
         lbl = QLabel(text)
@@ -176,8 +172,13 @@ class StatusStrip(QWidget):
         f = QFont(FONT_MONO); f.setPointSize(7)
         f.setStyleHint(QFont.Monospace)
         f.setLetterSpacing(QFont.PercentageSpacing, 128)
+        f.setUnderline(False); f.setStrikeOut(False)
         lbl.setFont(f)
-        lbl.setStyleSheet(f"color: {TEXT_DIM.name()};")
+        lbl.setFrameShape(QLabel.NoFrame)
+        lbl.setStyleSheet(
+            f"color: {TEXT_DIM.name()}; background: transparent;"
+            f" border: none; text-decoration: none;"
+        )
         return lbl
 
     def _divider_value_col(self) -> QWidget:
