@@ -120,6 +120,31 @@ class CompactHistory(QWidget):
                 color: {TEXT_HI.name()};
                 border-left: 2px solid #7be4ff;
             }}
+            /* HUD-styled scrollbar — match the transcript panel */
+            QListWidget QScrollBar:vertical {{
+                background: transparent;
+                width: 6px;
+                margin: 0;
+            }}
+            QListWidget QScrollBar::handle:vertical {{
+                background: rgba(138,149,172,90);
+                min-height: 24px;
+                border-radius: 0;
+            }}
+            QListWidget QScrollBar::handle:vertical:hover {{
+                background: rgba(138,149,172,140);
+            }}
+            QListWidget QScrollBar::add-line:vertical,
+            QListWidget QScrollBar::sub-line:vertical {{
+                height: 0;
+                background: transparent;
+                border: none;
+            }}
+            QListWidget QScrollBar::add-page:vertical,
+            QListWidget QScrollBar::sub-page:vertical {{
+                background: transparent;
+            }}
+            QListWidget QScrollBar:horizontal {{ height: 0; background: transparent; }}
         """)
 
         # Header
