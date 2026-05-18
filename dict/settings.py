@@ -30,6 +30,14 @@ class Settings:
     volume: float = 0.7    # 0.0 – 1.0; playback volume (not yet applied to WAVs)
     mic_gain: float = 1.0  # 0.5 – 5.0; software gain applied before transcription
     auto_paste: bool = field(default_factory=lambda: config.AUTO_PASTE)
+    # Language detection mode:
+    #   "single" — pass language=None to Whisper; one forward pass, internal auto-detect
+    #              over all 99 languages (occasionally slips into UK/PL/BY on short clips)
+    #   "dual"   — call detect_language() first, restrict to RU/EN, then transcribe
+    #              with the detected language pinned (no foreign-language hallucinations)
+    lang_detect_mode: str = field(
+        default_factory=lambda: getattr(config, "LANGUAGE_DETECT_MODE", "dual"),
+    )
 
     def to_dict(self) -> dict:
         return asdict(self)

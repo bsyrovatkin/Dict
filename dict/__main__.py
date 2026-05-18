@@ -247,6 +247,10 @@ def main() -> int:
         history = History(maxlen=config.HISTORY_MAX)
         recorder = Recorder()
         transcriber = Transcriber(model_size=effective_model)
+        try:
+            transcriber.set_lang_detect_mode(user_settings.lang_detect_mode)
+        except Exception:
+            log.exception("initial set_lang_detect_mode failed")
 
         controller_holder: dict[str, Controller] = {}
         hotkey_holder: dict[str, HotkeyWatcher] = {}
@@ -381,6 +385,12 @@ def main() -> int:
             if new.auto_paste != user_settings.auto_paste:
                 controller._auto_paste = new.auto_paste  # live toggle
                 log.info("auto_paste -> %s", new.auto_paste)
+            if new.lang_detect_mode != user_settings.lang_detect_mode:
+                # Live-apply language-detect mode without a restart
+                try:
+                    transcriber.set_lang_detect_mode(new.lang_detect_mode)
+                except Exception:
+                    log.exception("set_lang_detect_mode failed")
             # mutate user_settings reference so next dialog reads new values
             user_settings.hotkey = new.hotkey
             user_settings.model_size = new.model_size
@@ -388,6 +398,7 @@ def main() -> int:
             user_settings.volume = new.volume
             user_settings.mic_gain = new.mic_gain
             user_settings.auto_paste = new.auto_paste
+            user_settings.lang_detect_mode = new.lang_detect_mode
             log.info("settings applied (model/lang changes take effect next restart)")
 
         window.set_state("loading")

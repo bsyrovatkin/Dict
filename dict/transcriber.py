@@ -48,8 +48,20 @@ class TranscriberError(RuntimeError):
 class Transcriber:
     def __init__(self, model_size: str = config.MODEL_SIZE) -> None:
         self._model_size = model_size
+        # Runtime-toggleable language detection mode. Controller can override
+        # via set_lang_detect_mode() based on the Settings dialog.
+        #   "single" — pass language=None, Whisper internal auto-detect (99 langs)
+        #   "dual"   — explicit detect_language() restricted to RU/EN, then transcribe
+        self._lang_detect_mode: str = getattr(config, "LANGUAGE_DETECT_MODE", "dual")
         self._model: object | None = None
         self._load_lock = threading.Lock()
+
+    def set_lang_detect_mode(self, mode: str) -> None:
+        if mode not in ("single", "dual"):
+            log.warning("ignoring unknown lang_detect_mode=%r", mode)
+            return
+        log.info("lang_detect_mode: %s → %s", self._lang_detect_mode, mode)
+        self._lang_detect_mode = mode
 
     @property
     def is_loaded(self) -> bool:
@@ -102,9 +114,18 @@ class Transcriber:
         self.ensure_loaded()
         assert self._model is not None
         audio_f32 = (audio.astype(np.float32) / 32768.0)
-        # Two-language auto-detect — pick whichever of RU/EN is more likely
-        # for this chunk, so the decoder never tries Ukrainian / Polish / etc.
-        lang = self._detect_ru_or_en(audio_f32) or config.LANGUAGE
+        # Language selection branches on lang_detect_mode (Settings dialog):
+        #   "dual"   — explicit detect_language() restricted to RU/EN, then
+        #              transcribe with the pinned language
+        #   "single" — pass None and let Whisper's internal auto-detect decide
+        #              in the same forward pass (faster, but may slip into UK/PL/BY)
+        if config.LANGUAGE is not None:
+            lang = config.LANGUAGE  # user pinned, respect it
+        elif self._lang_detect_mode == "single":
+            lang = None  # Whisper auto-detect internally
+            log.info("transcribe: lang_detect_mode=single (whisper internal auto-detect)")
+        else:
+            lang = self._detect_ru_or_en(audio_f32)
         segments, info = self._model.transcribe(  # type: ignore[attr-defined]
             audio_f32,
             language=lang,

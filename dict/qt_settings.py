@@ -914,6 +914,17 @@ class SettingsDialog(QDialog):
         self._lang_combo.setCurrentText(_lang_label(self._current.language))
         layout.addWidget(_Field("LANGUAGE", self._lang_combo))
 
+        # Language-detect mode toggle — lets the user A/B-compare single vs
+        # dual auto-detect strategies without restarting.
+        self._detect_mode_combo = _StyledCombo()
+        self._detect_mode_combo.addItem("DUAL — detect → restrict RU/EN → transcribe")
+        self._detect_mode_combo.addItem("SINGLE — whisper internal auto-detect")
+        # Selected option mirrors the current setting
+        self._detect_mode_combo.setCurrentIndex(
+            0 if self._current.lang_detect_mode != "single" else 1
+        )
+        layout.addWidget(_Field("AUTODETECT", self._detect_mode_combo))
+
         layout.addStretch(1)
 
         # Removed (kept only as defaults in Settings, not editable in UI):
@@ -1024,6 +1035,11 @@ class SettingsDialog(QDialog):
         lang_value = next((v for lbl, v in LANGUAGE_CHOICES if lbl == lang_label_val),
                           self._current.language)
 
+        # Map combo index → mode string. Index 0 = DUAL, index 1 = SINGLE.
+        detect_mode = (
+            "single" if self._detect_mode_combo.currentIndex() == 1 else "dual"
+        )
+
         new = Settings(
             hotkey=combo,
             model_size=self._model_combo.currentText(),
@@ -1033,6 +1049,7 @@ class SettingsDialog(QDialog):
             volume=self._current.volume,
             mic_gain=self._current.mic_gain,
             auto_paste=self._auto_paste_toggle.is_on(),
+            lang_detect_mode=detect_mode,
         )
         log.info("SettingsDialog._save: built %s", new.to_dict())
         try:

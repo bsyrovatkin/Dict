@@ -30,6 +30,14 @@ LANGUAGE: str | None = None  # auto-detect
 # 8 beams (was 5) — wider search trades a little latency for more accurate
 # decoding, especially on mixed-language utterances and named entities.
 BEAM_SIZE = 8
+# Language detection mode (toggled in Settings dialog):
+#   "single" — Whisper auto-detects internally over all 99 languages, one
+#              transcribe call. Faster but can slip into UK/PL/BY/DE on
+#              short or noisy clips.
+#   "dual"   — explicit detect_language() first, restrict result to RU/EN,
+#              then transcribe with the pinned language. One extra forward
+#              pass, but never produces wrong-language output.
+LANGUAGE_DETECT_MODE = "dual"
 # Initial prompt — primes the decoder for the kinds of words you typically
 # dictate. Mix of Russian and English programming/product/dev vocabulary
 # helps the model bias toward correct spellings for jargon like "OAuth",
