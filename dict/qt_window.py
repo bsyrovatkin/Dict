@@ -1899,25 +1899,38 @@ class MainWindow(QWidget):
             return
         try:
             import ctypes
-            HWND_TOPMOST     = -1
-            SWP_NOSIZE       = 0x0001
-            SWP_NOMOVE       = 0x0002
-            SWP_NOACTIVATE   = 0x0010
-            SWP_SHOWWINDOW   = 0x0040
-            SW_SHOWNOACTIVATE = 4
+            HWND_TOPMOST       = -1
+            HWND_TOP           =  0
+            SWP_NOSIZE         = 0x0001
+            SWP_NOMOVE         = 0x0002
+            SWP_NOACTIVATE     = 0x0010
+            SWP_SHOWWINDOW     = 0x0040
+            SW_SHOWNOACTIVATE  = 4
+            flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
             user32 = ctypes.windll.user32
             hwnd = int(self.winId())
             old_fg = user32.GetForegroundWindow()
 
-            # 1. Force the HWND mapped and visible, do not activate.
+            # 1. Force the HWND mapped + visible without activation.
             sw = user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
-            # 2. Elevate to TOPMOST band, do not activate.
-            flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
-            swp = user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+
+            # 2. Set the WS_EX_TOPMOST extended style. By itself this only
+            #    *adds the flag* — it does not actually raise z-order if the
+            #    window was already created at the bottom of its z-band.
+            swp1 = user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+
+            # 3. Raise within the topmost band to the very top of z-order.
+            #    For a window that already has WS_EX_TOPMOST (from step 2),
+            #    HWND_TOP elevates it above ALL non-topmost windows AND above
+            #    other topmost peers. SWP_NOACTIVATE preserves the user's
+            #    keyboard focus — Windows guarantees the foreground/active
+            #    window doesn't change when this flag is set.
+            swp2 = user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags)
 
             log.info(
-                "_win32_pop_topmost: my_hwnd=%s old_fg=%s ShowWindow=%s SetWindowPos=%s",
-                hwnd, old_fg, sw, swp,
+                "_win32_pop_topmost: my_hwnd=%s old_fg=%s ShowWindow=%s "
+                "SetTopmost=%s SetTop=%s",
+                hwnd, old_fg, sw, swp1, swp2,
             )
         except Exception:
             log.exception("_win32_pop_topmost failed")
