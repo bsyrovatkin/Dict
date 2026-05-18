@@ -1875,39 +1875,49 @@ class MainWindow(QWidget):
                 log.exception("Qt flag sync failed")
 
     def _win32_pop_topmost(self) -> None:
-        """Bring the window above the currently-foreground app WITHOUT
-        stealing focus. User requirement (2026-05-18): «окно всплывает но
-        теряется фокус, если он раньше стоял в текстовом поле. Нужно чтобы
-        окно всплывало, но фокус не терялся».
+        """Show the window AND elevate it to TOPMOST z-order, WITHOUT
+        stealing keyboard focus from the user's text field.
 
-        SetWindowPos with HWND_TOPMOST + SWP_NOACTIVATE elevates z-order
-        without changing the active window (Windows guarantees NOACTIVATE
-        keeps focus on whatever was foreground). UIPI does NOT block this
-        path — UIPI only blocks SetForegroundWindow, not z-order changes on
-        TOPMOST class. So no AttachThreadInput, no BringWindowToTop, no
-        focus-restore dance — just the one call.
+        Two Win32 calls needed — each does exactly one of those things:
 
-        SWP_SHOWWINDOW is included so the window becomes visible even if
-        Qt's async show() hasn't completed mapping yet.
+          1. ShowWindow(hwnd, SW_SHOWNOACTIVATE)
+             — explicitly maps the window to the screen with the "do not
+             activate" flag. This is the equivalent of show() without focus
+             theft, and is more reliable than Qt's setAttribute trick when
+             the calling process doesn't own the foreground.
+
+          2. SetWindowPos(hwnd, HWND_TOPMOST, …, SWP_NOACTIVATE | SWP_SHOWWINDOW)
+             — adds WS_EX_TOPMOST so the window sits above ordinary peers.
+             SWP_NOACTIVATE keeps focus on whatever the user was typing in.
+
+        Calling either alone is insufficient: SetWindowPos won't display a
+        hidden window properly across all Windows builds, and ShowWindow
+        alone won't elevate z-order over Chrome.
         """
         import sys as _sys
         if _sys.platform != "win32":
             return
         try:
             import ctypes
-            HWND_TOPMOST = -1
-            SWP_NOSIZE = 0x0001
-            SWP_NOMOVE = 0x0002
-            SWP_NOACTIVATE = 0x0010
-            SWP_SHOWWINDOW = 0x0040
-            flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+            HWND_TOPMOST     = -1
+            SWP_NOSIZE       = 0x0001
+            SWP_NOMOVE       = 0x0002
+            SWP_NOACTIVATE   = 0x0010
+            SWP_SHOWWINDOW   = 0x0040
+            SW_SHOWNOACTIVATE = 4
             user32 = ctypes.windll.user32
             hwnd = int(self.winId())
             old_fg = user32.GetForegroundWindow()
+
+            # 1. Force the HWND mapped and visible, do not activate.
+            sw = user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
+            # 2. Elevate to TOPMOST band, do not activate.
+            flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+            swp = user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+
             log.info(
-                "_win32_pop_topmost: my_hwnd=%s old_fg=%s (no focus change)",
-                hwnd, old_fg,
+                "_win32_pop_topmost: my_hwnd=%s old_fg=%s ShowWindow=%s SetWindowPos=%s",
+                hwnd, old_fg, sw, swp,
             )
-            user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
         except Exception:
             log.exception("_win32_pop_topmost failed")
