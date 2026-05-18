@@ -1908,24 +1908,46 @@ class MainWindow(QWidget):
             SW_SHOWNOACTIVATE  = 4
             flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
             user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
             hwnd = int(self.winId())
             old_fg = user32.GetForegroundWindow()
 
-            # 1. Force the HWND mapped + visible without activation.
+            # CRITICAL — when our process doesn't own foreground (Chrome does,
+            # because the user was typing there), Windows silently REFUSES
+            # HWND_TOP z-order elevation, even with NOACTIVATE. The well-known
+            # workaround is AttachThreadInput: by attaching our thread to the
+            # foreground thread, Windows treats our process as if it owns the
+            # foreground for the duration of this call, granting us the right
+            # to do z-order changes. NOACTIVATE still prevents focus theft —
+            # the attach only lifts the rights restriction, it doesn't change
+            # which window is active.
+            attached = False
+            fg_thread = 0
+            my_thread = kernel32.GetCurrentThreadId()
+            try:
+                if old_fg:
+                    fg_thread = user32.GetWindowThreadProcessId(old_fg, 0)
+                    if fg_thread and fg_thread != my_thread:
+                        attached = bool(
+                            user32.AttachThreadInput(fg_thread, my_thread, True)
+                        )
+            except Exception:
+                log.exception("_win32_pop_topmost: AttachThreadInput failed")
+
+            # 1. Map + visible without activation.
             sw = user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
-
-            # 2. Set the WS_EX_TOPMOST extended style. By itself this only
-            #    *adds the flag* — it does not actually raise z-order if the
-            #    window was already created at the bottom of its z-band.
+            # 2. Set WS_EX_TOPMOST flag.
             swp1 = user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
-
-            # 3. Raise within the topmost band to the very top of z-order.
-            #    For a window that already has WS_EX_TOPMOST (from step 2),
-            #    HWND_TOP elevates it above ALL non-topmost windows AND above
-            #    other topmost peers. SWP_NOACTIVATE preserves the user's
-            #    keyboard focus — Windows guarantees the foreground/active
-            #    window doesn't change when this flag is set.
+            # 3. Raise to top of z-order — now succeeds because we're attached.
+            #    NOACTIVATE keeps focus on whatever was foreground (Chrome).
             swp2 = user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags)
+
+            # Detach immediately.
+            if attached:
+                try:
+                    user32.AttachThreadInput(fg_thread, my_thread, False)
+                except Exception:
+                    log.exception("_win32_pop_topmost: detach failed")
 
             log.info(
                 "_win32_pop_topmost: my_hwnd=%s old_fg=%s ShowWindow=%s "

@@ -84,7 +84,34 @@ class Transcriber:
             audio_f32,
             language=config.LANGUAGE,
             beam_size=config.BEAM_SIZE,
+            # condition_on_previous_text=True helps long-form coherence by
+            # letting Whisper see its own prior output. Helps multi-sentence
+            # accuracy at the cost of mild error propagation.
+            condition_on_previous_text=True,
+            # Temperature fallback chain: try greedy first, then ramp up only
+            # when the result fails confidence / compression checks. Catches
+            # cases where greedy gets stuck in a repeat loop.
+            temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+            # Reject hallucinated repetition and low-confidence garbage by
+            # falling through to the next temperature.
+            compression_ratio_threshold=2.4,
+            log_prob_threshold=-1.0,
+            no_speech_threshold=0.6,
+            # VAD pre-filter — drops silence regions before they reach the
+            # decoder. Tightened parameters: smaller min-silence so we don't
+            # merge separate utterances, and a longer max-speech window so
+            # one long sentence isn't split mid-word.
             vad_filter=True,
+            vad_parameters=dict(
+                min_silence_duration_ms=300,
+                speech_pad_ms=120,
+            ),
+            # Steer the decoder with a short prompt that primes the kinds of
+            # words the user typically dictates. Helps with mixed RU+EN
+            # programming/product terms and acronyms.
+            initial_prompt=config.INITIAL_PROMPT,
+            # word_timestamps off — we don't display them and they cost time.
+            word_timestamps=False,
         )
         parts = [seg.text.strip() for seg in segments]
         text = " ".join(p for p in parts if p).strip()

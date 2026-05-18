@@ -27,7 +27,19 @@ SILENCE_RMS_INT16 = 30     # approx -60 dBFS; permissive — Whisper's VAD handl
 # Whisper
 MODEL_SIZE = "small"       # multilingual
 LANGUAGE: str | None = None  # auto-detect
-BEAM_SIZE = 5
+# 8 beams (was 5) — wider search trades a little latency for more accurate
+# decoding, especially on mixed-language utterances and named entities.
+BEAM_SIZE = 8
+# Initial prompt — primes the decoder for the kinds of words you typically
+# dictate. Mix of Russian and English programming/product/dev vocabulary
+# helps the model bias toward correct spellings for jargon like "OAuth",
+# "Whisper", "GitHub", "TypeScript", etc. ~1 sentence is enough.
+INITIAL_PROMPT = (
+    "Диктовка для разработчика. Mixed Russian and English. "
+    "Common terms: GitHub, Whisper, OpenAI, Python, JavaScript, TypeScript, "
+    "API, OAuth, JWT, Docker, Kubernetes, PostgreSQL, Redis, Anthropic, "
+    "Claude, CUDA, NVIDIA, Chrome, VS Code, prompt, model, transcript."
+)
 
 # Hotkey. Syntax is the `keyboard` library format ("f9", "ctrl+shift+v",
 # "ctrl+alt+d"). Overridable at runtime via settings.json.
