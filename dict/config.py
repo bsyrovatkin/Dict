@@ -38,8 +38,21 @@ INITIAL_PROMPT = (
     "Диктовка для разработчика. Mixed Russian and English. "
     "Common terms: GitHub, Whisper, OpenAI, Python, JavaScript, TypeScript, "
     "API, OAuth, JWT, Docker, Kubernetes, PostgreSQL, Redis, Anthropic, "
-    "Claude, CUDA, NVIDIA, Chrome, VS Code, prompt, model, transcript."
+    "Claude, CUDA, NVIDIA, Chrome, VS Code, prompt, model, transcript. "
+    "Game ML pipeline terms: HUD, X-Clip, Rust, Arc Riders, density, "
+    "crouching, looting, AFK, episode, label."
 )
+
+# LLM polish stage — Whisper output is faithful but raw. A small LLM
+# post-pass cleans up filler words, fixes punctuation/grammar, and corrects
+# phonetic mistakes in technical terms ("Уиспер" → "Whisper"). This is what
+# makes ChatGPT voice feel more polished than raw Whisper.
+# Fail-soft: if no API key, polish is skipped and the raw output is used.
+POLISH_ENABLED = True
+POLISH_MODEL = "claude-3-5-haiku-20241022"
+# Resolution order: this constant → ANTHROPIC_API_KEY env var. Leave None
+# to use the env var (recommended — Claude Code's environment already has it).
+ANTHROPIC_API_KEY: str | None = None
 
 # Hotkey. Syntax is the `keyboard` library format ("f9", "ctrl+shift+v",
 # "ctrl+alt+d"). Overridable at runtime via settings.json.

@@ -252,6 +252,20 @@ class Controller:
                 # session's _start_recording() will clear it.
                 self._return_to_idle()
                 return
+            # LLM polish stage — cleans up filler words, fixes punctuation,
+            # corrects phonetic errors in technical terms. Fail-soft: if no
+            # API key or network error, returns the raw text unchanged.
+            try:
+                from dict.polisher import polish as _polish
+                polished = _polish(text)
+                if polished and polished != text:
+                    log.info(
+                        "polished text (raw=%d → polished=%d chars)",
+                        len(text), len(polished),
+                    )
+                    text = polished
+            except Exception:
+                log.exception("polish stage failed (continuing with raw text)")
             log.info("delivering %d chars (streamed=%s)", len(text), self._session_streamed)
             self._history.push(text)
             self._logger_append(text)

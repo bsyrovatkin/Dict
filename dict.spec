@@ -45,6 +45,10 @@ a = Analysis(  # noqa: F821
         # pynput registers platform-specific backends dynamically
         "pynput",
         "pynput.keyboard._win32",
+        # anthropic SDK (optional polish stage)
+        "anthropic",
+        "httpx",
+        "httpcore",
     ],
     hookspath=[],
     hooksconfig={},
