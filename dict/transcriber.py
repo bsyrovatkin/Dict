@@ -75,14 +75,39 @@ class Transcriber:
             except Exception as exc:
                 raise TranscriberError(f"whisper model load failed: {exc}") from exc
 
+    def _detect_ru_or_en(self, audio_f32: np.ndarray) -> str | None:
+        """Auto-detect language but restrict to RU/EN only.
+
+        Returns 'ru' or 'en' — whichever has higher probability — or None
+        if config.LANGUAGE pins a specific language (skip detection in that
+        case). Forces the decoder away from neighbour-language hallucinations
+        (Ukrainian, Belarusian, Polish, German) that auto-detect occasionally
+        slips into on short or noisy chunks.
+        """
+        if config.LANGUAGE is not None:
+            return None  # user pinned a language, respect it
+        try:
+            _, _, all_probs = self._model.detect_language(audio_f32)  # type: ignore[attr-defined]
+        except Exception:
+            log.exception("detect_language failed; falling back to 'en'")
+            return "en"
+        ru = float(all_probs.get("ru", 0.0)) if hasattr(all_probs, "get") else 0.0
+        en = float(all_probs.get("en", 0.0)) if hasattr(all_probs, "get") else 0.0
+        choice = "ru" if ru >= en else "en"
+        log.info("ru-or-en detect: ru=%.3f en=%.3f → %s", ru, en, choice)
+        return choice
+
     def transcribe(self, audio: np.ndarray) -> str:
         """Transcribe int16 mono audio at 16 kHz. Returns empty string if no speech."""
         self.ensure_loaded()
         assert self._model is not None
         audio_f32 = (audio.astype(np.float32) / 32768.0)
+        # Two-language auto-detect — pick whichever of RU/EN is more likely
+        # for this chunk, so the decoder never tries Ukrainian / Polish / etc.
+        lang = self._detect_ru_or_en(audio_f32) or config.LANGUAGE
         segments, info = self._model.transcribe(  # type: ignore[attr-defined]
             audio_f32,
-            language=config.LANGUAGE,
+            language=lang,
             beam_size=config.BEAM_SIZE,
             # condition_on_previous_text=True helps long-form coherence by
             # letting Whisper see its own prior output. Helps multi-sentence
