@@ -6,12 +6,22 @@
 
 **Jarvis-style voice-to-clipboard transcriber for Windows and macOS.**
 Press `F9` (or your bound hotkey), speak, press again — Russian/English speech
-is transcribed locally via Whisper and lands in your clipboard. A small
-history window shows the last five transcriptions with one-click copy.
+is transcribed locally via Whisper and lands in your clipboard / auto-pastes
+into the focused text field. A small history window shows the last five
+transcriptions with one-click copy.
 
 <p align="center">
   <img src="docs/screenshot.png" width="360" alt="Main window">
 </p>
+
+## Quick start (Windows, 2 minutes)
+
+1. **[Download `dict-windows-x64.zip`](https://github.com/bsyrovatkin/Dict/releases/latest)** (~134 MB)
+2. Extract anywhere (e.g. `C:\Tools\dict\`)
+3. Run **`dict.exe`** — that's it. No Python, no compilation, no setup.
+4. Press **F9** in any text field → speak → press F9 again → text is typed where your cursor was.
+
+[Full install guide ↓](#install--windows-no-python-no-compilation)
 
 ## Features
 
@@ -22,9 +32,42 @@ history window shows the last five transcriptions with one-click copy.
 - **Start / stop audio cues**, customisable
 - **Single-instance**, stays in the system tray
 
+## Install — Windows (no Python, no compilation)
+
+This is the recommended path for end users.
+
+1. Open the **[Releases page](https://github.com/bsyrovatkin/Dict/releases/latest)**
+   and download **`dict-windows-x64.zip`** (~134 MB).
+2. Extract the zip anywhere convenient, e.g. `C:\Tools\dict\`. You'll get a folder
+   called `dict\` containing `dict.exe` and `_internal\` next to it.
+3. Double-click **`dict.exe`** (or `launch-exe.bat` if you keep the folder structure).
+4. On first launch, Windows may show a SmartScreen warning ("Windows protected your PC").
+   Click **More info** → **Run anyway** — the binary is unsigned but built from this
+   public repo via PyInstaller.
+5. The Whisper model (~470 MB for `small`, ~3 GB for `large-v3`) downloads on first use
+   into `%USERPROFILE%\.cache\huggingface\hub\`.
+
+### CUDA acceleration (optional)
+
+If you have an NVIDIA GPU with ≥4 GB VRAM, Dict auto-detects CUDA via ctranslate2 and
+uses `int8_float16` compute — Whisper large-v3 transcribes a 10-second clip in
+~0.5–1 s on RTX 30/40 series. No CUDA toolkit install needed — the runtime DLLs ship
+inside the zip.
+
+### Optional: LLM polish (matches ChatGPT-voice quality)
+
+Whisper transcribes faithfully but raw — "um", "э", false starts, missing punctuation.
+If you set the `ANTHROPIC_API_KEY` environment variable, Dict will pipe each transcript
+through Claude Haiku for a final cleanup (~$0.0001 / dictation, ~200–500 ms). Fail-soft:
+no key or no network → raw Whisper output as before.
+
+```powershell
+setx ANTHROPIC_API_KEY "sk-ant-…"   # one-time, then restart Dict
+```
+
 ## Install — from source
 
-Requires **Python 3.10+** and a working microphone.
+For development. Requires **Python 3.10+** and a working microphone.
 
 ```powershell
 python -m venv .venv
@@ -33,13 +76,6 @@ pip install -e ".[dev]"
 python scripts\gen_assets.py         # regenerate icons / sounds
 python -m dict                       # run
 ```
-
-First launch downloads the Whisper model (~470 MB for `small`).
-
-## Install — pre-built
-
-Grab `dict-windows-x64.zip` from [Releases](../../releases), extract anywhere,
-double-click `dict.exe`. No Python needed.
 
 ## Run
 
