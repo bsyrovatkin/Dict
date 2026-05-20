@@ -4,6 +4,16 @@
   <img src="assets/icon_idle.png" width="160" alt="Dict icon">
 </p>
 
+<p align="center">
+  <a href="https://github.com/bsyrovatkin/Dict/releases/latest/download/dict-windows-x64.zip">
+    <img src="https://img.shields.io/github/v/release/bsyrovatkin/Dict?label=Download%20Windows%20x64&style=for-the-badge&color=7be4ff&logo=windows" alt="Download Windows x64">
+  </a>
+  &nbsp;
+  <a href="https://github.com/bsyrovatkin/Dict/releases">
+    <img src="https://img.shields.io/github/downloads/bsyrovatkin/Dict/total?style=for-the-badge&label=Total%20downloads&color=8a95ac" alt="Total downloads">
+  </a>
+</p>
+
 **Jarvis-style voice-to-clipboard transcriber for Windows and macOS.**
 Press `F9` (or your bound hotkey), speak, press again — Russian/English speech
 is transcribed locally via Whisper and lands in your clipboard / auto-pastes
@@ -14,9 +24,15 @@ transcriptions with one-click copy.
   <img src="docs/screenshot.png" width="360" alt="Main window">
 </p>
 
+> [!TIP]
+> **Looking for the installer?** It's not in the source tree — it's on the
+> [**Releases**](https://github.com/bsyrovatkin/Dict/releases) tab (right
+> sidebar on the repo page). Direct link:
+> [**dict-windows-x64.zip ↓**](https://github.com/bsyrovatkin/Dict/releases/latest/download/dict-windows-x64.zip)
+
 ## Quick start (Windows, 2 minutes)
 
-1. **[Download `dict-windows-x64.zip`](https://github.com/bsyrovatkin/Dict/releases/latest)** (~134 MB)
+1. **[Download `dict-windows-x64.zip`](https://github.com/bsyrovatkin/Dict/releases/latest/download/dict-windows-x64.zip)** (~134 MB, direct link to latest)
 2. Extract anywhere (e.g. `C:\Tools\dict\`)
 3. Run **`dict.exe`** — that's it. No Python, no compilation, no setup.
 4. Press **F9** in any text field → speak → press F9 again → text is typed where your cursor was.
