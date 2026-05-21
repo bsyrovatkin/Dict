@@ -7,6 +7,7 @@ from typing import Optional
 import numpy as np
 
 from dict import config
+from dict.hallucinations import is_hallucination, strip_hallucination_lines
 from dict.utils_logging import get_logger
 
 log = get_logger(__name__)
@@ -126,23 +127,36 @@ class Transcriber:
             log.info("transcribe: lang_detect_mode=single (whisper internal auto-detect)")
         else:
             lang = self._detect_ru_or_en(audio_f32)
+        # Language-specific initial prompt: a mixed-language prompt actively
+        # primes cross-language hallucinations ("Thank you for watching"
+        # leaks through even with language='ru'). Pick the prompt that
+        # matches the pinned language; default to RU if unpinned (single
+        # auto-detect mode) since this user dictates primarily in Russian.
+        if lang == "en":
+            initial_prompt = getattr(config, "INITIAL_PROMPT_EN", config.INITIAL_PROMPT)
+        else:
+            initial_prompt = getattr(config, "INITIAL_PROMPT_RU", config.INITIAL_PROMPT)
         segments, info = self._model.transcribe(  # type: ignore[attr-defined]
             audio_f32,
             language=lang,
             beam_size=config.BEAM_SIZE,
-            # condition_on_previous_text=True helps long-form coherence by
-            # letting Whisper see its own prior output. Helps multi-sentence
-            # accuracy at the cost of mild error propagation.
-            condition_on_previous_text=True,
-            # Temperature fallback chain: try greedy first, then ramp up only
-            # when the result fails confidence / compression checks. Catches
-            # cases where greedy gets stuck in a repeat loop.
-            temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+            # condition_on_previous_text=False — dictation is short discrete
+            # utterances, not long-form narration. Conditioning on prior
+            # output here mostly propagates hallucinations across segments
+            # (one "Thank you." seeds the next chunk to repeat it).
+            condition_on_previous_text=False,
+            # Temperature fallback ladder capped at 0.4. Above 0.4 the
+            # decoder starts inventing high-prior YouTube-subtitle artifacts
+            # ("Subtitles by the Amara.org community", "Thank you.") on
+            # low-confidence audio instead of failing gracefully.
+            temperature=[0.0, 0.2, 0.4],
             # Reject hallucinated repetition and low-confidence garbage by
             # falling through to the next temperature.
             compression_ratio_threshold=2.4,
             log_prob_threshold=-1.0,
-            no_speech_threshold=0.6,
+            # Stricter (was 0.6). On marginal audio Whisper prefers to
+            # output empty rather than a stock filler phrase.
+            no_speech_threshold=0.7,
             # VAD pre-filter — drops silence regions before they reach the
             # decoder. Tightened parameters: smaller min-silence so we don't
             # merge separate utterances, and a longer max-speech window so
@@ -155,12 +169,28 @@ class Transcriber:
             # Steer the decoder with a short prompt that primes the kinds of
             # words the user typically dictates. Helps with mixed RU+EN
             # programming/product terms and acronyms.
-            initial_prompt=config.INITIAL_PROMPT,
+            initial_prompt=initial_prompt,
             # word_timestamps off — we don't display them and they cost time.
             word_timestamps=False,
         )
-        parts = [seg.text.strip() for seg in segments]
-        text = " ".join(p for p in parts if p).strip()
+        # Per-segment hallucination filter: drop segments that are *only*
+        # a known Whisper stock phrase. Real segments containing a mix of
+        # real speech + artifact are passed to strip_hallucination_lines()
+        # which removes the artifact sentences and keeps the rest.
+        parts: list[str] = []
+        for seg in segments:
+            s = (seg.text or "").strip()
+            if not s:
+                continue
+            if is_hallucination(s):
+                log.info("dropped hallucinated segment: %r", s)
+                continue
+            cleaned = strip_hallucination_lines(s)
+            if cleaned:
+                parts.append(cleaned)
+            elif s:
+                log.info("dropped hallucinated segment (post-strip): %r", s)
+        text = " ".join(parts).strip()
         log.info("transcribed lang=%s duration=%.2fs -> %d chars",
                  info.language, info.duration, len(text))
         return text

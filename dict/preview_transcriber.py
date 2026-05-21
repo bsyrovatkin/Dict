@@ -14,6 +14,7 @@ from typing import Optional
 import numpy as np
 
 from dict import config
+from dict.hallucinations import is_hallucination, strip_hallucination_lines
 from dict.transcriber import probe_cuda
 from dict.utils_logging import get_logger
 
@@ -66,6 +67,22 @@ class PreviewTranscriber:
             beam_size=1,
             vad_filter=False,
             condition_on_previous_text=False,
+            # Match Transcriber: capped temperature ladder + stricter
+            # no_speech_threshold suppress stock-phrase hallucinations on
+            # the mid-utterance preview audio (which is even more prone to
+            # them because it always ends mid-word).
+            temperature=[0.0, 0.2, 0.4],
+            no_speech_threshold=0.7,
         )
-        parts = [seg.text.strip() for seg in segments]
-        return " ".join(p for p in parts if p).strip()
+        # Same hallucination filter as the main Transcriber. Preview text
+        # is shown live in the UI; a flashing "Thank you." is jarring even
+        # though it gets overwritten by the real commit a moment later.
+        parts: list[str] = []
+        for seg in segments:
+            s = (seg.text or "").strip()
+            if not s or is_hallucination(s):
+                continue
+            cleaned = strip_hallucination_lines(s)
+            if cleaned:
+                parts.append(cleaned)
+        return " ".join(parts).strip()

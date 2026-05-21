@@ -39,17 +39,26 @@ BEAM_SIZE = 8
 #              pass, but never produces wrong-language output.
 LANGUAGE_DETECT_MODE = "dual"
 # Initial prompt — primes the decoder for the kinds of words you typically
-# dictate. Mix of Russian and English programming/product/dev vocabulary
-# helps the model bias toward correct spellings for jargon like "OAuth",
-# "Whisper", "GitHub", "TypeScript", etc. ~1 sentence is enough.
-INITIAL_PROMPT = (
-    "Диктовка для разработчика. Mixed Russian and English. "
-    "Common terms: GitHub, Whisper, OpenAI, Python, JavaScript, TypeScript, "
-    "API, OAuth, JWT, Docker, Kubernetes, PostgreSQL, Redis, Anthropic, "
-    "Claude, CUDA, NVIDIA, Chrome, VS Code, prompt, model, transcript. "
-    "Game ML pipeline terms: HUD, X-Clip, Rust, Arc Riders, density, "
-    "crouching, looting, AFK, episode, label."
+# dictate. Language-specific variants: a mixed-language prompt actively
+# primes cross-language hallucinations (RU pin + English-heavy prompt →
+# decoder slips into English "stock filler" like "Thank you for watching").
+# Each prompt lists the same jargon, just framed in the target language.
+INITIAL_PROMPT_RU = (
+    "Диктовка для разработчика. Технические термины латиницей: "
+    "GitHub, Whisper, OpenAI, Python, JavaScript, TypeScript, API, OAuth, "
+    "JWT, Docker, Kubernetes, PostgreSQL, Redis, Anthropic, Claude, CUDA, "
+    "NVIDIA, Chrome, VS Code, HUD, X-Clip, Rust, Arc Riders, AFK."
 )
+INITIAL_PROMPT_EN = (
+    "Developer dictation. Common terms: GitHub, Whisper, OpenAI, Python, "
+    "JavaScript, TypeScript, API, OAuth, JWT, Docker, Kubernetes, "
+    "PostgreSQL, Redis, Anthropic, Claude, CUDA, NVIDIA, Chrome, VS Code, "
+    "HUD, X-Clip, Rust, Arc Riders, density, crouching, looting, AFK, "
+    "episode, label."
+)
+# Kept for back-compat with any code/tests that still import INITIAL_PROMPT.
+# Defaults to the RU variant since this user dictates primarily in Russian.
+INITIAL_PROMPT = INITIAL_PROMPT_RU
 
 # LLM polish stage — Whisper output is faithful but raw. A small LLM
 # post-pass cleans up filler words, fixes punctuation/grammar, and corrects
