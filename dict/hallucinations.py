@@ -121,6 +121,71 @@ _HALLUCINATION_PHRASES: tuple[str, ...] = (
 )
 
 
+# YouTube subtitler credit lines almost always end with a SUBTITLER NAME or
+# handle ("DimaTorzok", "ru.SubsCenter", "Arctic Studio", ...). Enumerating
+# every name is hopeless — Whisper inherits hundreds from YouTube training
+# data. Instead we match the credit-line PREFIX in several languages and
+# accept anything (name, handle, URL, whitespace) as the tail.
+#
+# Rules of thumb to stay safe:
+#   - Anchor with ^...$ so we only kill segments that are ENTIRELY a credit
+#     line, not real prose that happens to contain "subtitles".
+#   - Require a verb/preposition immediately after the noun, so prose like
+#     "Subtitles need to be reviewed by Friday" or "Субтитры нужно проверить"
+#     does not match.
+#   - Case- and unicode-insensitive via re.IGNORECASE | re.UNICODE.
+_CREDIT_LINE_RE: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE | re.UNICODE)
+    for p in (
+        # Russian verb form: "Субтитры создавал DimaTorzok", "Субтитры
+        # подготовил Иван", "Субтитры от ru.SubsCenter". Verb list is broad
+        # on purpose — Whisper sees dozens of variants in training data
+        # ("создал/создавал/подготовил/перевёл/написал…").
+        r"^\s*субтитры\s+(?:"
+        r"созда(?:л|ла|ли|вал|вала|вали)|"
+        r"подготовил(?:а|и)?|подгонял(?:а|и)?|подогнал(?:а|и)?|"
+        r"сделал(?:а|и)?|написал(?:а|и)?|"
+        r"перев(?:ё|е)л(?:а|и)?|перевод(?:чик)?|"
+        r"редактор|корректор|от"
+        r")\b.*$",
+        # Russian separator form: "Субтитры — Arctic Studio", "Субтитры:
+        # X". `\b` doesn't work after `—`/`:` (non-word→non-word), so we
+        # match the separator + whitespace + at least one tail char.
+        r"^\s*субтитры\s*[—–\-:]\s+\S.*$",
+        # Russian: "Перевод и субтитры — X", "Перевод субтитров: X"
+        r"^\s*перевод\s+(?:и\s+)?субтитр[а-я]*\b.*$",
+        # Russian: standalone credit roles followed by a name
+        # ("Корректор: Анна", "Редактор субтитров — X")
+        r"^\s*(?:корректор|редактор\s+субтитров)\s*[:—–\-]\s*\S.*$",
+        # English: "Subtitles by X", "Captions by X", "Translation by X",
+        # "Transcription by X". Requires "by" immediately after — kills
+        # "Subtitles by John Doe" but not "Subtitles need review by Friday".
+        r"^\s*(?:subtitles|captions|transcription|translation)\s+by\b.*$",
+        # German: "Untertitel von ARD", "Untertitelung durch X"
+        r"^\s*untertitel(?:ung)?\s+(?:von|im\s+auftrag|der|durch)\b.*$",
+        # French: "Sous-titres par X", "Sous-titres réalisés par X"
+        r"^\s*sous[-\s]titres\s+(?:par|de|réalisés|effectués)\b.*$",
+        # Italian: "Sottotitoli e revisione a cura di X", "Sottotitoli di X"
+        r"^\s*sottotitoli\s+(?:e\s+revisione|di|a\s+cura)\b.*$",
+    )
+)
+
+
+def _matches_credit_line(text: str) -> bool:
+    """True if `text` looks like a YouTube subtitler credit line.
+
+    Credit lines have the shape `<credit-prefix> <subtitler-name>` in many
+    languages. We can't enumerate every name (hundreds in Whisper's training
+    data), so we match the prefix and accept any tail.
+    """
+    if not text or not text.strip():
+        return False
+    for pat in _CREDIT_LINE_RE:
+        if pat.match(text):
+            return True
+    return False
+
+
 # Bracketed sound-effect tags Whisper emits: [Music], [Applause], (laughter),
 # ♪ ... ♪ etc. We strip the whole token when it consists ONLY of bracketing
 # characters, music symbols, and whitespace — i.e. there is no real letter
@@ -199,6 +264,8 @@ def is_hallucination(text: str) -> bool:
     if not text or not text.strip():
         return False
     if _is_bracketed_artifact(text):
+        return True
+    if _matches_credit_line(text):
         return True
     return _normalise(text) in _NORMALISED_HALLUCINATIONS
 
